@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <defs>
+    <!-- 背景渐变色 (取自你的草地颜色) -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#AAD751" />
+      <stop offset="100%" stop-color="#A2D149" />
+    </linearGradient>
+    
+    <!-- 增加一点立体阴影 -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  
+  <!-- 圆角背景底板 -->
+  <rect width="120" height="120" rx="25" fill="url(#bg-grad)" />
+  
+  <!-- 隐约的网格线，凸显出棋盘/对战要素 -->
+  <g stroke="#8CBF3A" stroke-width="2" opacity="0.6">
+    <path d="M 30 0 v 120 M 60 0 v 120 M 90 0 v 120" />
+    <path d="M 0 30 h 120 M 0 60 h 120 M 0 90 h 120" />
+  </g>
+  
+  <!-- 科技感折线 (代表AI路径或贪吃蛇主体) -->
+  <path d="M 30 90 L 30 60 L 90 60 L 90 30 L 60 30" 
+        fill="none" 
+        stroke="#4C6EF5" 
+        stroke-width="16" 
+        stroke-linecap="square" 
+        stroke-linejoin="miter" 
+        filter="url(#shadow)" />
+  
+  <!-- 头部焦点/蛇眼 -->
+  <circle cx="60" cy="30" r="4" fill="white" />
+  <circle cx="60" cy="30" r="2" fill="#4C6EF5" />
+</svg>
