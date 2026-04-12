@@ -43,46 +43,50 @@ export default {
 
 <style scoped>
 .game-navbar {
-    background-color: #1e1e1e; /* 深灰色背景匹配游戏风 */
-    border-bottom: 3px solid #AAD751; /* 底部使用游戏地图中浅绿色的亮边 */
+    background-color: #FFFFFF;
+    border-bottom: 3px solid #AAD751;
+    box-shadow: 0 4px 15px rgba(170, 215, 81, 0.15);
 }
 
 .game-navbar .navbar-brand {
-    color: #ffffff;
+    color: #2C3E2D;
     font-size: 1.5rem;
     letter-spacing: 1px;
 }
 
 .game-navbar .nav-link {
-    color: rgba(255, 255, 255, 0.75);
-    transition: color 0.2s;
+    color: #6B7D6C;
+    transition: all 0.3s ease;
+    font-weight: 500;
 }
 
 .game-navbar .nav-link:hover {
-    color: #AAD751;
+    color: #89B92B;
 }
 
 .game-navbar .nav-link.active {
-    color: #A2D149;
-    text-shadow: 0 0 5px rgba(162, 209, 73, 0.5); /* 微微的发光效果 */
+    color: #89B92B;
+    font-weight: 700;
 }
 
 .logo-glow {
-    filter: drop-shadow(0 0 3px #AAD751);
+    filter: drop-shadow(0 0 2px rgba(170, 215, 81, 0.6));
 }
 
 .game-dropdown {
-    background-color: #2b2b2b;
-    border: 1px solid #444;
+    background-color: #FFFFFF;
+    border: 1px solid #AAD751;
+    box-shadow: 0 4px 10px rgba(170, 215, 81, 0.15);
 }
 
 .game-dropdown .dropdown-item {
-    color: white;
+    color: #2C3E2D;
+    transition: all 0.2s;
 }
 
 .game-dropdown .dropdown-item:hover {
     background-color: #AAD751;
-    color: #1e1e1e;
+    color: #ffffff;
     font-weight: bold;
 }
 </style>
