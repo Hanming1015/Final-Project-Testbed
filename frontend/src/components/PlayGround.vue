@@ -19,8 +19,7 @@ export default {
 .playground {
     width: 60vw;
     height: 65vh;
-    margin: 60px auto;
-
+    margin: 80px auto;
     /* border-radius: 20px;
     box-shadow: 
         0 15px 35px rgba(0, 0, 0, 0.15), 

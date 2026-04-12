@@ -15,14 +15,22 @@
                         <router-link class="nav-link fw-semibold" active-class="active" :to="{ name: 'playground' }">Playground</router-link>
                     </li>
                 </ul>
-                <ul class="navbar-nav">
+                <ul class="navbar-nav" v-if="!$store.state.user.is_login">
+                    <li class="nav-item">
+                        <router-link class="nav-link fw-semibold" active-class="active" :to="{ name: 'user_account_login' }">Login</router-link>
+                    </li>
+                    <li class="nav-item">
+                        <router-link class="nav-link fw-semibold" active-class="active" :to="{ name: 'user_account_register' }">Register</router-link>
+                    </li>
+                </ul>
+                <ul class="navbar-nav" v-else>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle fw-semibold" href="#" role="button" data-bs-toggle="dropdown"
                             aria-expanded="false">
-                            Hanming
+                            {{ $store.state.user.username }}
                         </a>
                         <ul class="dropdown-menu game-dropdown">
-                            <li><a class="dropdown-item" href="#">Logout</a></li>
+                            <li><a class="dropdown-item" href="#" @click="logout">Logout</a></li>
                         </ul>
                     </li>
                 </ul>
@@ -32,11 +40,23 @@
 </template>
 
 <script>
+import { useStore } from 'vuex';
+import { useRouter } from 'vue-router';
 
 export default {
     name: 'NavBar',
     setup() {
+        const store = useStore();
+        const router = useRouter();
 
+        const logout = () => {
+            store.dispatch("logout");
+            router.push({ name: 'user_account_login' });
+        }
+
+        return {
+            logout
+        }
     }
 }
 </script>
