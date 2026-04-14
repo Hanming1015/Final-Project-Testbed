@@ -62,8 +62,21 @@ export default {
                 username: username.value,
                 password: password.value,
                 success() {
-                    router.push({ name: 'playground' }); 
-                    console.log(store.state.user);
+                    store.dispatch("getinfo", {
+                        success() {
+                            router.push({ name: 'playground' });
+                            console.log(store.state.user);
+                        },
+                        error() {
+                            localStorage.removeItem("jwt_token");
+                            store.commit("updateToken", "");
+                            store.commit("updateUser", {
+                                id: "",
+                                username: "",
+                                is_login: false
+                            });
+                        }
+                    });
                 },
                 error() {
                     error_message.value = "Invalid username or password.";

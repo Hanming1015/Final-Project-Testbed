@@ -32,19 +32,17 @@ export default {
                 password: data.password
             }).then(resp => {
                 const responseData = resp.data;
-                if (responseData.error_message === "success") {
-                    localStorage.setItem("jwt_token", responseData.token);
-                    context.commit("updateToken", responseData.token);
-                    // context.commit("updateUser", {
-                    //     username: data.username,
-                    //     is_login: true,
-                    // });
+                if (responseData.token || responseData.error_message === "success") {
+                    const token = responseData.token || responseData.data?.token;
+                    
+                    localStorage.setItem("jwt_token", token);
+                    context.commit("updateToken", token);
                     data.success(responseData);
                 } else {
                     data.error(responseData);
                 }
             }).catch(() => {
-                data.error("Network error: Connection to the server failed.");
+                data.error({ error_message: "Network error: Connection to the server failed." });
             });
         },
         getinfo (context, data) {

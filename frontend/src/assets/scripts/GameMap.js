@@ -13,12 +13,12 @@ export class GameMap extends AcGameObject {
         this.rows = 13;
         this.cols = 14;
 
-        this.inner_walls_count = 20; // number of walls in the inner area
+        this.inner_walls_count = 2; // number of walls in the inner area
         this.walls = [];
 
         this.snakes = [
             new Snake({id: 0, color: "#4876EC", r: this.rows - 2, c: 1}, this),
-            new Snake({id: 1, color: "#F50057", r: 1, c: this.cols - 2}, this)
+            // new Snake({id: 1, color: "#F50057", r: 1, c: this.cols - 2}, this)
         ];
     }
 
@@ -128,7 +128,7 @@ export class GameMap extends AcGameObject {
     check_ready() {
         for (const snake of this.snakes) {
             if (snake.status !== "idle") return false;
-            if (snake.direction === -1) return false;
+            //if (snake.direction === -1) return false;
         }
         return true;
     }

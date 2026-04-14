@@ -13,8 +13,8 @@ export class Snake extends AcGameObject {
         this.cells = [new Cell(info.r, info.c)]; // store the coordinates of the snake's body segments, the first element is the head
         this.next_cell = null; // the next cell the snake will move to
         
-        this.speed = 5; // cells per second
-        this.direction = -1; // -1: no direction, 0: up, 1: right, 2: down, 3: left
+        this.speed = 3; // cells per second
+        this.direction = 0; // -1: no direction, 0: up, 1: right, 2: down, 3: left
         this.status = "idle"; // idle: not moving, move: moving, die: dead
 
         this.dr = [-1, 0, 1, 0];
@@ -45,6 +45,7 @@ export class Snake extends AcGameObject {
     }
 
     set_direction(d) {
+        if (Math.abs(this.eye_direction - d) === 2) return;
         this.direction = d;
     }
 
@@ -58,7 +59,7 @@ export class Snake extends AcGameObject {
         const d = this.direction;
         this.next_cell = new Cell(this.cells[0].r + this.dr[d], this.cells[0].c + this.dc[d]);
         this.eye_direction = d;
-        this.direction = -1; // reset direction
+        // this.direction = -1; // reset direction
         this.status = "move";
         this.step++;
 
@@ -103,7 +104,7 @@ export class Snake extends AcGameObject {
     }
 
     update() {
-        if (this.status === "move") {
+        if (this.status === "move" && this.next_cell) {
             this.update_move();
         }
         this.render();
