@@ -65,7 +65,7 @@ export default {
                     store.dispatch("getinfo", {
                         success() {
                             router.push({ name: 'playground' });
-                            console.log(store.state.user);
+                            console.log("User info: ", store.state.user);
                         },
                         error() {
                             localStorage.removeItem("jwt_token");

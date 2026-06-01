@@ -4,7 +4,15 @@ export default {
         status: "matching", // matching, waiting, playing
         socket: null,
         opponent_username: "",
-        gamemap: null
+        gamemap: null,
+        a_id: "",
+        a_sx: 0,
+        a_sy: 0,
+        b_id: "",
+        b_sx: 0,
+        b_sy: 0,
+        gameObject: null,
+        loser: "none", // "all", "A", "B", "none"
     },
     getters: {
     },
@@ -18,8 +26,21 @@ export default {
         updateOpponent(state, opponent) {
             state.opponent_username = opponent.username;
         },
-        updateGamemap(state, gamemap) {
-            state.gamemap = gamemap;
+        updateGamemap(state, game) {
+            state.gamemap = game.map;
+            state.a_id = game.a_id;
+            state.a_sx = game.a_sx;
+            state.a_sy = game.a_sy;
+            state.b_id = game.b_id;
+            state.b_sx = game.b_sx;
+            state.b_sy = game.b_sy;
+            //console.log("gamemap updated: ", state.gamemap);
+        },
+        updateGameObject(state, gameObject) {
+            state.gameObject = gameObject;
+        },
+        updateLoser(state, loser) {
+            state.loser = loser;
         }
     },
     actions: {
