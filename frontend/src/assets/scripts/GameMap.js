@@ -55,7 +55,6 @@ export class GameMap extends AcGameObject {
 
     start() {
         this.create_walls()
-    
         this.add_listening_events();
     }
 
@@ -101,8 +100,6 @@ export class GameMap extends AcGameObject {
 
         return true;
     }
-
-
 
     update() {
         this.update_size();

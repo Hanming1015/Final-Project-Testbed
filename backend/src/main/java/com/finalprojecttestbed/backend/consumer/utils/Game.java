@@ -125,22 +125,33 @@ public class Game extends Thread{
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        for (int i = 0; i < 50; i ++ ) {
+
+        lock.lock();
+        try {
+            if (nextStepA != null && nextStepB != null) {
+                playerA.getSteps().add(nextStepA);
+                playerB.getSteps().add(nextStepB);
+                return true;
+            }
+        } finally {
+            lock.unlock();
+        }
+
+        for (int i = 0; i < 50; i++) {
             try {
                 Thread.sleep(100);
-                lock.lock();
-                try {
-                    if (nextStepA != null && nextStepB != null) {
-                        //System.out.println(nextStepA + " " + nextStepB);
-                        playerA.getSteps().add(nextStepA);
-                        playerB.getSteps().add(nextStepB);
-                        return true;
-                    }
-                } finally {
-                    lock.unlock();
-                }
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
+            }
+            lock.lock();
+            try {
+                if (nextStepA != null && nextStepB != null) {
+                    playerA.getSteps().add(nextStepA);
+                    playerB.getSteps().add(nextStepB);
+                    return true;
+                }
+            } finally {
+                lock.unlock();
             }
         }
         return false;
@@ -197,7 +208,6 @@ public class Game extends Thread{
             resp.put("a_direction", nextStepA);
             resp.put("b_direction", nextStepB);
             sendAllMessage(resp.toJSONString());
-            nextStepA = nextStepB = null;
         } finally {
             lock.unlock();
         }
