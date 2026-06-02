@@ -1,9 +1,13 @@
-export class Cell {
-    constructor(r, c) {
+import { AcGameObject } from "./AcGameObject";
+
+export class Apple extends AcGameObject {
+    constructor(r, c, gamemap) {
+        super();
+
         this.r = r;
         this.c = c;
-        this.x = c + 0.5;
-        this.y = r + 0.5;
+        this.gamemap = gamemap;
+        this.color = '#E4051A';
     }
 
     update() {

@@ -1,6 +1,5 @@
 package com.finalprojecttestbed.backend.consumer.utils;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -8,17 +7,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Data
-@AllArgsConstructor
 @NoArgsConstructor
 public class Player {
     private String id;
     private Integer sx;
     private Integer sy;
     private List<Integer> steps;
+    private List<Integer> appleEatenSteps;
+
+    public Player(String id, Integer sx, Integer sy, List<Integer> steps) {
+        this.id = id;
+        this.sx = sx;
+        this.sy = sy;
+        this.steps = steps;
+        this.appleEatenSteps = new ArrayList<>();
+    }
 
     private boolean checkTailIncreasing(int step) {
         if (step <= 10) return true;
         return step % 3 == 1;
+    }
+
+    public void decreaseTail(int step) {
+        appleEatenSteps.add(step);
     }
 
     public List<Cell> getCells() {
@@ -31,7 +42,10 @@ public class Player {
             x += dx[d];
             y += dy[d];
             res.add(new Cell(x, y));
-            if (!checkTailIncreasing( ++ step)) {
+            if (!checkTailIncreasing(++step)) {
+                res.remove(0);
+            }
+            if (appleEatenSteps.contains(step) && res.size() > 1) {
                 res.remove(0);
             }
         }
@@ -40,7 +54,7 @@ public class Player {
 
     public String getStepsString() {
         StringBuilder res = new StringBuilder();
-        for (int d: steps) {
+        for (int d : steps) {
             res.append(d);
         }
         return res.toString();

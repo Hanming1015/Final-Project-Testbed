@@ -45,11 +45,15 @@ export default {
                     }, 1000);
                     store.commit("updateGamemap", data.game);
                 } else if (data.event === "move") {
-                    //console.log("Received move event: ", data);
                     const game = store.state.playground.gameObject;
+                    if (!game) return;
                     const [snake0, snake1] = game.snakes;
                     snake0.set_direction(data.a_direction);
                     snake1.set_direction(data.b_direction);
+                    snake0.eat_apple = data.a_ate_apple;
+                    snake1.eat_apple = data.b_ate_apple;
+                    game.apple.r = data.apple_r;
+                    game.apple.c = data.apple_c;
                 } else if (data.event === "result") {
                     console.log("Game result: ", data);
                     const game = store.state.playground.gameObject;

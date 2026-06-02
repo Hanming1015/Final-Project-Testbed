@@ -1,6 +1,7 @@
 import { AcGameObject } from "./AcGameObject";
 import { Snake } from "./Snake";
 import { Wall } from "./Wall";
+import { Apple } from "./Apple";
 
 export class GameMap extends AcGameObject {
     constructor(ctx, parent, store) {
@@ -11,8 +12,8 @@ export class GameMap extends AcGameObject {
         this.store = store;
         this.L = 0; // length of one grid
 
-        this.rows = 13;
-        this.cols = 14;
+        this.rows = 25;
+        this.cols = 28;
 
         this.walls = [];
 
@@ -20,15 +21,28 @@ export class GameMap extends AcGameObject {
             new Snake({id: 0, color: "#4876EC", r: this.rows - 2, c: 1}, this),
             new Snake({id: 1, color: "#F50057", r: 1, c: this.cols - 2}, this)
         ];
+
+        this.apple = null;
     }
 
     create_walls() {
         const g = this.store.state.playground.gamemap;
-        // create wall objects
         for (let r = 0; r < this.rows; r++) {
             for (let c = 0; c < this.cols; c++) {
-                if (g[r][c]) {
+                if (g[r][c] === 1) {
                     this.walls.push(new Wall(r, c, this));
+                }
+            }
+        }
+    }
+
+    create_apple() {
+        const g = this.store.state.playground.gamemap;
+        for (let r = 0; r < this.rows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                if (g[r][c] === 2) {
+                    this.apple = new Apple(r, c, this);
+                    return;
                 }
             }
         }
@@ -53,7 +67,8 @@ export class GameMap extends AcGameObject {
     }
 
     start() {
-        this.create_walls()
+        this.create_walls();
+        this.create_apple();
         this.add_listening_events();
     }
 
