@@ -16,7 +16,7 @@ public class Player {
     private Integer sy;
     private List<Integer> steps;
 
-    private boolean checkTailIncreasing(int step) { //检查当前回合，蛇的长度是否增加
+    private boolean checkTailIncreasing(int step) {
         if (step <= 10) return true;
         return step % 3 == 1;
     }

@@ -19,8 +19,8 @@ public class Game extends Thread{
 
     private final Player playerA, playerB;
 
-    private Integer nextStepA = null;
-    private Integer nextStepB = null;
+    private Integer nextStepA = 0;  // A down
+    private Integer nextStepB = 2;  // B up
 
     private ReentrantLock lock = new ReentrantLock();
     private String status = "playing";
@@ -119,42 +119,19 @@ public class Game extends Thread{
         }
     }
 
-    private boolean nextStep() {
+    private void nextStep() {
         try {
             Thread.sleep(200);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-
         lock.lock();
         try {
-            if (nextStepA != null && nextStepB != null) {
-                playerA.getSteps().add(nextStepA);
-                playerB.getSteps().add(nextStepB);
-                return true;
-            }
+            playerA.getSteps().add(nextStepA);
+            playerB.getSteps().add(nextStepB);
         } finally {
             lock.unlock();
         }
-
-        for (int i = 0; i < 50; i++) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-            lock.lock();
-            try {
-                if (nextStepA != null && nextStepB != null) {
-                    playerA.getSteps().add(nextStepA);
-                    playerB.getSteps().add(nextStepB);
-                    return true;
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-        return false;
     }
 
     private boolean checkValid(List<Cell> cellsA, List<Cell> cellsB) {
@@ -223,28 +200,11 @@ public class Game extends Thread{
     @Override
     public void run() {
         for (int i = 0; i < 1000; i++) {
-            if (nextStep()) {
-                judge();
-                if (status.equals("playing")) {
-                    sendMove();
-                } else {
-                    sendResult();
-                    break;
-                }
+            nextStep();
+            judge();
+            if (status.equals("playing")) {
+                sendMove();
             } else {
-                status = "finished";
-                lock.lock();
-                try {
-                    if (nextStepA == null && nextStepB == null) {
-                        loser = "all";
-                    } else if (nextStepA == null) {
-                        loser = "A";
-                    } else {
-                        loser = "B";
-                    }
-                } finally {
-                    lock.unlock();
-                }
                 sendResult();
                 break;
             }
