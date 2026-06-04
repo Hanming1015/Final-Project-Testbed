@@ -3,11 +3,13 @@ package com.finalprojecttestbed.backend.consumer.utils;
 import com.alibaba.fastjson.JSONObject;
 import com.finalprojecttestbed.backend.consumer.WebSocketServer;
 
+import java.io.*;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Game extends Thread{
@@ -20,9 +22,11 @@ public class Game extends Thread{
     public final static int[] dy = {0, 1, 0, -1};
 
     private final Player playerA, playerB;
+    private final boolean botA, botB;
+    private final Bot bot;
 
-    private Integer nextStepA = 0;  // A down
-    private Integer nextStepB = 2;  // B up
+    private Integer nextStepA = 0;  // A default up
+    private Integer nextStepB = 2;  // B default down
 
     private ReentrantLock lock = new ReentrantLock();
     private String status = "playing";
@@ -31,13 +35,36 @@ public class Game extends Thread{
     private int appleR, appleC;
     private boolean ateAppleA, ateAppleB;
 
+    private final String gameId = UUID.randomUUID().toString().substring(0, 8);
+    private PrintWriter telemetryWriter;
+
     public Game(Integer rows, Integer cols, Integer innerWallsCount, String idA, String idB) {
+        this(rows, cols, innerWallsCount, idA, idB, false, false);
+    }
+
+    public Game(Integer rows, Integer cols, Integer innerWallsCount,
+                String idA, String idB, boolean botA, boolean botB) {
         this.rows = rows;
         this.cols = cols;
         this.innerWallsCount = innerWallsCount;
         this.g = new int[rows][cols];
+        this.botA = botA;
+        this.botB = botB;
+        this.bot = (botA || botB) ? new Bot(rows, cols) : null;
         this.playerA = new Player(idA, rows - 2, 1, new ArrayList<>());
         this.playerB = new Player(idB, 1, cols - 2, new ArrayList<>());
+        try {
+            File dir = new File("training_data");
+            dir.mkdirs();
+            FileWriter fw = new FileWriter("training_data/game_" + gameId + ".csv");
+            telemetryWriter = new PrintWriter(new BufferedWriter(fw));
+            StringBuilder header = new StringBuilder("game_id,tick,player,direction");
+            for (int i = 0; i < 25; i++) header.append(",g").append(String.format("%02d", i));
+            header.append(",apple_dr,apple_dc,just_ate_apple");
+            telemetryWriter.println(header);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public Player getPlayerA() {
@@ -114,21 +141,20 @@ public class Game extends Thread{
             }
         }
 
-        // init apple
+        if (!checkConnectivity(this.rows - 2, 1, 1, this.cols - 2)) return false;
+
+        // init apple after connectivity check to avoid DFS overwriting g[r][c]=2
         for (int i = 0; i < 1000; i ++) {
             int r = random.nextInt(this.rows);
             int c = random.nextInt(this.cols);
             if (g[r][c] == 1) continue;
-            else if (r == this.rows - 2 && c == 1 || r == 1 && c == this.cols - 2) continue;
-            else {
-                g[r][c] = 2;
-                appleR = r;
-                appleC = c;
-                break;
-            }
+            if (r == this.rows - 2 && c == 1 || r == 1 && c == this.cols - 2) continue;
+            g[r][c] = 2;
+            appleR = r;
+            appleC = c;
+            return true;
         }
-
-        return checkConnectivity(this.rows - 2, 1, 1, this.cols - 2);
+        return true;
     }
 
     public void createMap() {
@@ -145,6 +171,10 @@ public class Game extends Thread{
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+        if (botA) nextStepA = bot.computeDirection(nextStepA, g,
+                playerA.getCells(), playerB.getCells(), appleR, appleC);
+        if (botB) nextStepB = bot.computeDirection(nextStepB, g,
+                playerB.getCells(), playerA.getCells(), appleR, appleC);
         lock.lock();
         try {
             playerA.getSteps().add(nextStepA);
@@ -165,7 +195,7 @@ public class Game extends Thread{
             }
         }
 
-        for (int i = 0; i < n - 1; i ++ ) {
+        for (int i = 0; i < cellsB.size(); i++) {
             if (cellsB.get(i).getX() == cell.getX() && cellsB.get(i).getY() == cell.getY()) {
                 return false;
             }
@@ -179,6 +209,58 @@ public class Game extends Thread{
 
         if (g[cell.getX()][cell.getY()] == 2) return true;
         return false;
+    }
+
+    private int[] computeGrid(Player self, Player opponent) {
+        List<Cell> selfCells = self.getCells();
+        List<Cell> oppCells = opponent.getCells();
+        Cell head = selfCells.get(selfCells.size() - 1);
+        int hr = head.getX(), hc = head.getY();
+
+        int[] grid = new int[25];
+        for (int dr = -2; dr <= 2; dr++) {
+            for (int dc = -2; dc <= 2; dc++) {
+                int r = hr + dr, c = hc + dc;
+                int idx = (dr + 2) * 5 + (dc + 2);
+                if (r < 0 || r >= rows || c < 0 || c >= cols || g[r][c] == 1) {
+                    grid[idx] = 1;
+                }
+            }
+        }
+        for (int i = 0; i < selfCells.size() - 1; i++) {
+            Cell cell = selfCells.get(i);
+            int dr = cell.getX() - hr, dc = cell.getY() - hc;
+            if (dr >= -2 && dr <= 2 && dc >= -2 && dc <= 2)
+                grid[(dr + 2) * 5 + (dc + 2)] = 1;
+        }
+        for (Cell cell : oppCells) {
+            int dr = cell.getX() - hr, dc = cell.getY() - hc;
+            if (dr >= -2 && dr <= 2 && dc >= -2 && dc <= 2)
+                grid[(dr + 2) * 5 + (dc + 2)] = 1;
+        }
+        grid[12] = 0; // head center is always 0
+        return grid;
+    }
+
+    private void collectTelemetry(Player self, Player opponent, int direction, boolean ateApple) {
+        if (telemetryWriter == null) return;
+        List<Cell> cells = self.getCells();
+        Cell head = cells.get(cells.size() - 1);
+        int hr = head.getX(), hc = head.getY();
+
+        int[] grid = computeGrid(self, opponent);
+        double apple_dr = (double)(appleR - hr) / rows;
+        double apple_dc = (double)(appleC - hc) / cols;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(gameId).append(',')
+          .append(self.getSteps().size()).append(',')
+          .append(self.getId()).append(',')
+          .append(direction);
+        for (int v : grid) sb.append(',').append(v);
+        sb.append(String.format(",%.4f,%.4f,%d", apple_dr, apple_dc, ateApple ? 1 : 0));
+        telemetryWriter.println(sb);
+        telemetryWriter.flush();
     }
 
     private void spawnApple() {
@@ -284,11 +366,17 @@ public class Game extends Thread{
             nextStep();
             judge();
             if (status.equals("playing")) {
+                int dirA = playerA.getSteps().get(playerA.getSteps().size() - 1);
+                int dirB = playerB.getSteps().get(playerB.getSteps().size() - 1);
+                collectTelemetry(playerA, playerB, dirA, ateAppleA);
+                collectTelemetry(playerB, playerA, dirB, ateAppleB);
                 sendMove();
             } else {
+                if (telemetryWriter != null) telemetryWriter.close();
                 sendResult();
                 break;
             }
         }
+        if (telemetryWriter != null) telemetryWriter.close();
     }
 }

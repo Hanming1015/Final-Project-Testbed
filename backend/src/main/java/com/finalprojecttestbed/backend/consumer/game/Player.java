@@ -4,6 +4,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Data
@@ -30,6 +31,7 @@ public class Player {
 
     public void decreaseTail(int step) {
         appleEatenSteps.add(step);
+        appleEatenSteps.add(step);
     }
 
     public List<Cell> getCells() {
@@ -45,7 +47,8 @@ public class Player {
             if (!checkTailIncreasing(++step)) {
                 res.remove(0);
             }
-            if (appleEatenSteps.contains(step) && res.size() > 1) {
+            int freq = Collections.frequency(appleEatenSteps, step);
+            for (int i = 0; i < freq && res.size() > 1; i++) {
                 res.remove(0);
             }
         }
