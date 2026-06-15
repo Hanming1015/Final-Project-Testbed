@@ -132,8 +132,11 @@ public class WebSocketServer {
         } else if (event.equals("stop-matching")) {
             stopMatching();
         } else if (event.equals("move")) {
-            //System.out.println(jsonObject.getInteger("direction"));
             move(jsonObject.getInteger("direction"));
+        } else if (event.equals("ping")) {
+            JSONObject pong = new JSONObject();
+            pong.put("event", "pong");
+            sendMessage(pong.toJSONString());
         }
     }
 
