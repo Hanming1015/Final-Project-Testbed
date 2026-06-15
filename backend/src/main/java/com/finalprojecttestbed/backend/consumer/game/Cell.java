@@ -1,4 +1,4 @@
-package com.finalprojecttestbed.backend.consumer.utils;
+package com.finalprojecttestbed.backend.consumer.game;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

@@ -1,7 +1,7 @@
 package com.finalprojecttestbed.backend.consumer;
 
 import com.alibaba.fastjson.JSONObject;
-import com.finalprojecttestbed.backend.consumer.utils.Game;
+import com.finalprojecttestbed.backend.consumer.game.Game;
 import com.finalprojecttestbed.backend.consumer.utils.JwtAuthentication;
 import com.finalprojecttestbed.backend.mapper.UserMapper;
 import com.finalprojecttestbed.backend.pojo.User;
@@ -71,7 +71,7 @@ public class WebSocketServer {
             matchPool.remove(userA);
             matchPool.remove(userB);
 
-            Game game = new Game(25,28,0, userA.getId(), userB.getId());
+            Game game = new Game(25,28,40, userA.getId(), userB.getId());
             game.createMap();
 
             if (users.get(userA.getId()) != null) {
@@ -111,7 +111,7 @@ public class WebSocketServer {
 
     public void stopMatching() {
         System.out.println("stop matching");
-        matchPool.add(this.user);
+        matchPool.remove(this.user);
     }
 
     private void move(int direction) {

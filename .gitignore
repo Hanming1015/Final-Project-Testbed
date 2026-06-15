@@ -1,0 +1,23 @@
+# Build output
+target/
+*.class
+*.jar
+*.war
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Spring Boot sensitive config — use application.properties.example instead
+backend/src/main/resources/application.properties
+
+# Generated training data (large CSV files)
+backend/training_data/
+
+# OS
+.DS_Store
+Thumbs.db

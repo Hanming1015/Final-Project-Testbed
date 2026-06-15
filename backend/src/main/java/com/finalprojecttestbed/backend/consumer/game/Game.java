@@ -1,7 +1,8 @@
-package com.finalprojecttestbed.backend.consumer.utils;
+package com.finalprojecttestbed.backend.consumer.game;
 
 import com.alibaba.fastjson.JSONObject;
 import com.finalprojecttestbed.backend.consumer.WebSocketServer;
+import com.finalprojecttestbed.backend.consumer.bot.Bot;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -36,7 +37,7 @@ public class Game extends Thread{
     private boolean ateAppleA, ateAppleB;
 
     private final String gameId = UUID.randomUUID().toString().substring(0, 8);
-    private PrintWriter telemetryWriter;
+    private final List<String[]> telemetryBuffer; // [playerId, rowData]
 
     public Game(Integer rows, Integer cols, Integer innerWallsCount, String idA, String idB) {
         this(rows, cols, innerWallsCount, idA, idB, false, false);
@@ -53,18 +54,8 @@ public class Game extends Thread{
         this.bot = (botA || botB) ? new Bot(rows, cols) : null;
         this.playerA = new Player(idA, rows - 2, 1, new ArrayList<>());
         this.playerB = new Player(idB, 1, cols - 2, new ArrayList<>());
-        try {
-            File dir = new File("training_data");
-            dir.mkdirs();
-            FileWriter fw = new FileWriter("training_data/game_" + gameId + ".csv");
-            telemetryWriter = new PrintWriter(new BufferedWriter(fw));
-            StringBuilder header = new StringBuilder("game_id,tick,player,direction");
-            for (int i = 0; i < 25; i++) header.append(",g").append(String.format("%02d", i));
-            header.append(",apple_dr,apple_dc,just_ate_apple");
-            telemetryWriter.println(header);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        // Only collect telemetry for bot games to keep training data clean
+        this.telemetryBuffer = (botA || botB) ? new ArrayList<>() : null;
     }
 
     public Player getPlayerA() {
@@ -166,10 +157,12 @@ public class Game extends Thread{
     }
 
     private void nextStep() {
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        if (!botA || !botB) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
         if (botA) nextStepA = bot.computeDirection(nextStepA, g,
                 playerA.getCells(), playerB.getCells(), appleR, appleC);
@@ -243,14 +236,15 @@ public class Game extends Thread{
     }
 
     private void collectTelemetry(Player self, Player opponent, int direction, boolean ateApple) {
-        if (telemetryWriter == null) return;
+        if (telemetryBuffer == null) return;
         List<Cell> cells = self.getCells();
         Cell head = cells.get(cells.size() - 1);
         int hr = head.getX(), hc = head.getY();
 
         int[] grid = computeGrid(self, opponent);
-        double apple_dr = (double)(appleR - hr) / rows;
-        double apple_dc = (double)(appleC - hc) / cols;
+        double norm = Math.max(rows, cols);
+        double apple_dr = (appleR - hr) / norm;
+        double apple_dc = (appleC - hc) / norm;
 
         StringBuilder sb = new StringBuilder();
         sb.append(gameId).append(',')
@@ -259,8 +253,7 @@ public class Game extends Thread{
           .append(direction);
         for (int v : grid) sb.append(',').append(v);
         sb.append(String.format(",%.4f,%.4f,%d", apple_dr, apple_dc, ateApple ? 1 : 0));
-        telemetryWriter.println(sb);
-        telemetryWriter.flush();
+        telemetryBuffer.add(new String[]{self.getId(), sb.toString()});
     }
 
     private void spawnApple() {
@@ -327,8 +320,10 @@ public class Game extends Thread{
     }
 
     private void sendAllMessage(String message) {
-        WebSocketServer.users.get(playerA.getId()).sendMessage(message);
-        WebSocketServer.users.get(playerB.getId()).sendMessage(message);
+        var connA = WebSocketServer.users.get(playerA.getId());
+        var connB = WebSocketServer.users.get(playerB.getId());
+        if (connA != null) connA.sendMessage(message);
+        if (connB != null) connB.sendMessage(message);
     }
 
     private void sendMove() {
@@ -348,6 +343,36 @@ public class Game extends Thread{
         }
     }
 
+    private void flushTelemetry() {
+        if (telemetryBuffer == null || telemetryBuffer.isEmpty()) return;
+        try {
+            new File("training_data").mkdirs();
+            try (PrintWriter writer = new PrintWriter(new BufferedWriter(
+                    new FileWriter("training_data/game_" + gameId + ".csv")))) {
+                StringBuilder header = new StringBuilder("game_id,tick,player,direction");
+                for (int i = 0; i < 25; i++) header.append(",g").append(String.format("%02d", i));
+                header.append(",apple_dr,apple_dc,just_ate_apple,result");
+                writer.println(header);
+                for (String[] entry : telemetryBuffer) {
+                    String playerId = entry[0];
+                    String rowData  = entry[1];
+                    String result;
+                    if (loser.equals("all")) {
+                        result = "draw";
+                    } else if ((loser.equals("A") && playerId.equals(playerA.getId()))
+                            || (loser.equals("B") && playerId.equals(playerB.getId()))) {
+                        result = "loss";
+                    } else {
+                        result = "win";
+                    }
+                    writer.println(rowData + "," + result);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     private void sendResult() {
         JSONObject resp = new JSONObject();
         resp.put("event", "result");
@@ -362,7 +387,8 @@ public class Game extends Thread{
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
-        for (int i = 0; i < 10000; i++) {
+        int tickLimit = (botA && botB) ? 1500 : 10000;
+        for (int i = 0; i < tickLimit; i++) {
             nextStep();
             judge();
             if (status.equals("playing")) {
@@ -372,11 +398,11 @@ public class Game extends Thread{
                 collectTelemetry(playerB, playerA, dirB, ateAppleB);
                 sendMove();
             } else {
-                if (telemetryWriter != null) telemetryWriter.close();
+                flushTelemetry();
                 sendResult();
                 break;
             }
         }
-        if (telemetryWriter != null) telemetryWriter.close();
+        flushTelemetry(); // safety flush if loop exits without break (10000 tick limit)
     }
 }
