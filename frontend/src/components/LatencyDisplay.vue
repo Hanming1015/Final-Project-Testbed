@@ -30,9 +30,9 @@ export default {
         const effective = computed(() => props.rtt + props.injected);
 
         const colorFor = ms => {
-            if (ms < 100) return '#4caf50';
-            if (ms < 200) return '#ff9800';
-            return '#f44336';
+            if (ms < 100) return '#16a34a';
+            if (ms < 200) return '#d97706';
+            return '#dc2626';
         };
 
         const rttColor       = computed(() => colorFor(props.rtt));
@@ -45,31 +45,37 @@ export default {
 
 <style scoped>
 .panel {
-    background: rgba(20, 20, 24, 0.92);
-    border: 1px solid #2c2c34;
-    border-radius: 10px;
-    padding: 12px 14px;
-    color: #e8e8ea;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--tb-card);
+    border: 1px solid var(--tb-border);
+    border-radius: var(--tb-radius);
+    box-shadow: var(--tb-shadow);
+    padding: 14px 16px;
+    color: var(--tb-fg);
+    font-family: var(--tb-font-ui);
     font-size: 13px;
     user-select: none;
 }
 .panel-title {
-    font-size: 10px;
-    color: #8a8a92;
+    font-size: 11px;
+    color: var(--tb-muted);
     text-transform: uppercase;
-    letter-spacing: 1.2px;
-    margin-bottom: 10px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-bottom: 12px;
 }
 .stat {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 5px;
+    align-items: center;
+    margin-bottom: 6px;
 }
-.label { color: #8a8a92; }
-.value { font-weight: bold; }
+.label { color: var(--tb-muted); }
+.value {
+    font-weight: 600;
+    font-family: var(--tb-font-mono);
+}
 .divider {
-    border-top: 1px solid #2c2c34;
-    margin: 6px 0;
+    border-top: 1px solid var(--tb-border-2);
+    margin: 8px 0;
 }
 </style>

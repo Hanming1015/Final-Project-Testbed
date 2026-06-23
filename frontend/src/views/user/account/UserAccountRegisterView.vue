@@ -75,73 +75,77 @@ export default {
 <style scoped>
 .auth-container {
     margin-top: 10vh;
+    font-family: var(--tb-font-ui);
 }
 
 .auth-card {
-    background-color: #FFFFFF;
+    background-color: var(--tb-card);
     padding: 40px 50px;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
-    border-bottom: 4px solid #AAD751;
+    border-radius: 14px;
+    border: 1px solid var(--tb-border);
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
 .auth-title {
     text-align: center;
-    color: #554A3F;
-    font-weight: bold;
+    color: var(--tb-fg);
+    font-weight: 700;
+    letter-spacing: -0.01em;
     margin-bottom: 30px;
 }
 
 .form-label {
-    color: #2C3E2D;
+    color: var(--tb-muted);
     font-weight: 500;
+    font-size: 13px;
 }
 
 .game-input {
-    border: 2px solid #EAF2D7;
-    border-radius: 8px;
+    border: 1px solid var(--tb-border);
+    border-radius: var(--tb-radius);
+    color: var(--tb-fg);
     font-weight: 500;
-    transition: all 0.3s;
+    transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .game-input:focus {
-    border-color: #AAD751;
-    box-shadow: 0 0 8px rgba(170, 215, 81, 0.3);
+    border-color: var(--tb-accent);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
     outline: none;
 }
 
 .error-message {
-    color: #F50057;
+    color: var(--tb-danger);
     font-size: 0.9em;
     min-height: 20px;
 }
 
 .submit-btn {
-    background-color: #AAD751;
-    color: white;
-    font-weight: bold;
-    border: none;
-    border-radius: 8px;
+    background-color: var(--tb-accent);
+    color: #fff;
+    font-weight: 600;
+    border: 1px solid var(--tb-accent);
+    border-radius: var(--tb-radius);
     padding: 10px;
-    transition: background-color 0.2s, transform 0.1s;
+    transition: filter 0.15s, transform 0.05s;
 }
 
 .submit-btn:hover {
-    background-color: #89B92B;
+    filter: brightness(1.07);
 }
 
 .submit-btn:active {
-    transform: translateY(2px);
+    transform: translateY(1px);
 }
 
 .game-link {
-    color: #6B7D6C;
+    color: var(--tb-muted);
     text-decoration: none;
     font-weight: 500;
-    transition: color 0.2s;
+    transition: color 0.15s;
 }
 
 .game-link:hover {
-    color: #89B92B;
+    color: var(--tb-accent);
 }
 </style>

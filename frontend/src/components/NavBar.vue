@@ -12,7 +12,6 @@
             <div class="collapse navbar-collapse" id="navbarText">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0">
                     <li class="nav-item">
-                        <router-link class="nav-link fw-semibold" active-class="active" :to="{ name: 'playground' }">Playground</router-link>
                     </li>
                 </ul>
                 <ul class="navbar-nav" v-if="!$store.state.user.is_login">
@@ -63,50 +62,53 @@ export default {
 
 <style scoped>
 .game-navbar {
-    background-color: #FFFFFF;
-    border-bottom: 3px solid #AAD751;
-    box-shadow: 0 4px 15px rgba(170, 215, 81, 0.15);
+    background-color: var(--tb-card);
+    border-bottom: 1px solid var(--tb-border);
+    box-shadow: var(--tb-shadow);
+    font-family: var(--tb-font-ui);
 }
 
 .game-navbar .navbar-brand {
-    color: #2C3E2D;
-    font-size: 1.5rem;
-    letter-spacing: 1px;
+    color: var(--tb-fg);
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 
 .game-navbar .nav-link {
-    color: #6B7D6C;
-    transition: all 0.3s ease;
+    color: var(--tb-muted);
+    transition: color 0.15s ease;
     font-weight: 500;
 }
 
 .game-navbar .nav-link:hover {
-    color: #89B92B;
+    color: var(--tb-fg);
 }
 
 .game-navbar .nav-link.active {
-    color: #89B92B;
-    font-weight: 700;
+    color: var(--tb-accent);
+    font-weight: 600;
 }
 
 .logo-glow {
-    filter: drop-shadow(0 0 2px rgba(170, 215, 81, 0.6));
+    filter: none;
 }
 
 .game-dropdown {
-    background-color: #FFFFFF;
-    border: 1px solid #AAD751;
-    box-shadow: 0 4px 10px rgba(170, 215, 81, 0.15);
+    background-color: var(--tb-card);
+    border: 1px solid var(--tb-border);
+    border-radius: var(--tb-radius);
+    box-shadow: var(--tb-shadow);
 }
 
 .game-dropdown .dropdown-item {
-    color: #2C3E2D;
-    transition: all 0.2s;
+    color: var(--tb-fg);
+    transition: background 0.15s, color 0.15s;
 }
 
 .game-dropdown .dropdown-item:hover {
-    background-color: #AAD751;
+    background-color: var(--tb-accent);
     color: #ffffff;
-    font-weight: bold;
+    font-weight: 600;
 }
 </style>

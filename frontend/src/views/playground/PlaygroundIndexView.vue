@@ -385,6 +385,8 @@ export default {
     padding: 16px;
     height: 88vh;
     box-sizing: border-box;
+    background: var(--tb-bg);
+    font-family: var(--tb-font-ui);
 }
 .game-area {
     flex: 1 1 auto;
@@ -393,9 +395,10 @@ export default {
     align-items: center;
     justify-content: center;
     min-width: 0;
-    background: rgba(20, 20, 24, 0.45);
-    border: 1px solid #2c2c34;
+    background: var(--tb-card);
+    border: 1px solid var(--tb-border);
     border-radius: 12px;
+    box-shadow: var(--tb-shadow);
     overflow: hidden;
 }
 .sidebar {
@@ -405,6 +408,6 @@ export default {
     gap: 12px;
     overflow-y: auto;
     scrollbar-width: thin;
-    scrollbar-color: #444 transparent;
+    scrollbar-color: #cbd5e1 transparent;
 }
 </style>

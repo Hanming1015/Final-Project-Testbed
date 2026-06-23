@@ -56,12 +56,13 @@ export default {
 
 <style scoped>
 .panel {
-    background: rgba(20, 20, 24, 0.92);
-    border: 1px solid #2c2c34;
-    border-radius: 10px;
-    padding: 12px 14px;
-    color: #e8e8ea;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--tb-card);
+    border: 1px solid var(--tb-border);
+    border-radius: var(--tb-radius);
+    box-shadow: var(--tb-shadow);
+    padding: 14px 16px;
+    color: var(--tb-fg);
+    font-family: var(--tb-font-ui);
     font-size: 13px;
     user-select: none;
 }
@@ -69,39 +70,50 @@ export default {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 .panel-title {
-    font-size: 10px;
-    color: #8a8a92;
+    font-size: 11px;
+    color: var(--tb-muted);
     text-transform: uppercase;
-    letter-spacing: 1.2px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
 }
 .toggle-btn {
-    background: #33333a;
-    color: #8a8a92;
-    border: none;
-    border-radius: 4px;
-    padding: 2px 10px;
+    background: var(--tb-border-2);
+    color: var(--tb-muted);
+    border: 1px solid var(--tb-border);
+    border-radius: 6px;
+    padding: 2px 12px;
     cursor: pointer;
-    font-family: inherit;
+    font-family: var(--tb-font-ui);
     font-size: 12px;
-    transition: background 0.15s, color 0.15s;
+    font-weight: 600;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .toggle-btn.active {
-    background: #4caf50;
+    background: var(--tb-success);
+    border-color: var(--tb-success);
     color: #fff;
 }
 .slider-wrap {
-    margin-bottom: 6px;
+    margin-bottom: 8px;
     transition: opacity 0.2s;
 }
-.slider-wrap.disabled { opacity: 0.35; }
-.slider-wrap input[type="range"] { width: 100%; }
+.slider-wrap.disabled { opacity: 0.4; }
+.slider-wrap input[type="range"] {
+    width: 100%;
+    accent-color: var(--tb-accent);
+}
 .value-row {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    align-items: center;
+    font-size: 13px;
 }
-.dim { color: #8a8a92; }
+.value-row span:last-child {
+    font-weight: 600;
+    font-family: var(--tb-font-mono);
+}
+.dim { color: var(--tb-muted); }
 </style>

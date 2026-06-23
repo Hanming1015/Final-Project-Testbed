@@ -52,48 +52,51 @@ export default {
 
 <style scoped>
 .panel {
-    background: rgba(20, 20, 24, 0.92);
-    border: 1px solid #2c2c34;
-    border-radius: 10px;
-    padding: 12px 14px;
-    color: #e8e8ea;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--tb-card);
+    border: 1px solid var(--tb-border);
+    border-radius: var(--tb-radius);
+    box-shadow: var(--tb-shadow);
+    padding: 14px 16px;
+    color: var(--tb-fg);
+    font-family: var(--tb-font-ui);
     font-size: 13px;
     user-select: none;
 }
 .panel-title {
-    font-size: 10px;
-    color: #8a8a92;
+    font-size: 11px;
+    color: var(--tb-muted);
     text-transform: uppercase;
-    letter-spacing: 1.2px;
-    margin-bottom: 10px;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-bottom: 12px;
 }
 .log-body {
     max-height: 200px;
     overflow-y: auto;
     scrollbar-width: thin;
-    scrollbar-color: #444 transparent;
+    scrollbar-color: #cbd5e1 transparent;
 }
 .empty {
-    color: #555;
+    color: var(--tb-muted-2);
     font-style: italic;
-    font-size: 11px;
+    font-size: 12px;
 }
 .log-entry {
     display: flex;
-    gap: 5px;
+    gap: 6px;
     align-items: center;
-    padding: 3px 0;
-    border-bottom: 1px solid #1e1e22;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--tb-border-2);
+    font-family: var(--tb-font-mono);
 }
 .log-entry:last-child { border-bottom: none; }
-.time   { color: #6f6f78; font-size: 10px; min-width: 70px; }
-.player     { color: #8a8a92; font-size: 10px; min-width: 18px; }
-.step-badge { color: #b9b9c0; font-size: 9px; min-width: 28px; }
-.dir    { color: #fff; font-weight: bold; min-width: 14px; }
-.sep    { color: #555; }
-.log-entry.pending  .result { color: #8a8a92; }
-.log-entry.correct  .result { color: #4caf50; }
-.log-entry.rollback .result { color: #f44336; }
-.log-entry.expired  .result { color: #555; }
+.time   { color: var(--tb-muted-2); font-size: 10px; min-width: 70px; }
+.player     { color: var(--tb-muted); font-size: 10px; min-width: 18px; }
+.step-badge { color: var(--tb-muted); font-size: 9px; min-width: 28px; }
+.dir    { color: var(--tb-fg); font-weight: 700; min-width: 14px; }
+.sep    { color: var(--tb-muted-2); }
+.log-entry.pending  .result { color: var(--tb-muted); }
+.log-entry.correct  .result { color: var(--tb-success); }
+.log-entry.rollback .result { color: var(--tb-danger); }
+.log-entry.expired  .result { color: var(--tb-muted-2); }
 </style>
