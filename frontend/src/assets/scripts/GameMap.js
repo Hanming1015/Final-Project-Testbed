@@ -157,7 +157,10 @@ export class GameMap extends AcGameObject {
     // confirmed moves with no animation so rendering catches up; always leave a
     // small lead (the prediction lookahead) to animate smoothly.
     advance() {
-        const MAX_LAG = 2;
+        // Legitimate backlog = up to 2 predicted (lookahead) + 1 in-flight real
+        // move = 3. Only fast-forward when genuinely behind that (e.g. fps dip),
+        // so a normal prediction burst animates smoothly instead of teleporting.
+        const MAX_LAG = 3;
         while (this.check_ready()) {
             const backlog = Math.min(
                 this.snakes[0].direction_queue.length,

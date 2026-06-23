@@ -1,11 +1,16 @@
 <template>
-    <div>
-        <PlayGround v-if="$store.state.playground.status === 'playing'" />
-        <MatchGround v-else />
-        <ResultBoard v-if="$store.state.playground.loser !== 'none'" />
-        <LatencyDisplay  :rtt="rttMs"      :injected="injectedMs" />
-        <LatencyInjector v-model="injectedMs" />
-        <PredictionLog   :entries="logEntries" />
+    <div class="dashboard">
+        <div class="game-area">
+            <PlayGround v-if="$store.state.playground.status === 'playing'" />
+            <MatchGround v-else />
+            <ResultBoard v-if="$store.state.playground.loser !== 'none'" />
+        </div>
+        <aside class="sidebar">
+            <LatencyDisplay  :rtt="rttMs" :injected="injectedMs" />
+            <LatencyInjector v-model="injectedMs" />
+            <PredictionLog   :entries="logEntries" />
+            <SyncMonitor     :entries="syncEntries" />
+        </aside>
     </div>
 </template>
 
@@ -16,11 +21,13 @@ import ResultBoard    from '@/components/ResultBoard.vue';
 import LatencyDisplay  from '@/components/LatencyDisplay.vue';
 import LatencyInjector from '@/components/LatencyInjector.vue';
 import PredictionLog   from '@/components/PredictionLog.vue';
+import SyncMonitor     from '@/components/SyncMonitor.vue';
 import { SnakePredictor } from '@/assets/scripts/SnakePredictor';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 
 const MAX_LOG = 30;
+const MAX_SYNC = 100;
 const PREDICTION_ENABLED = true;
 const LOOKAHEAD = 2; // K: predict this many steps ahead (RTT 200ms / tick 100ms)
 let _predId = 0;     // monotonic ID for log entries
@@ -34,13 +41,14 @@ function timestamp() {
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3).slice(0, 2)}`;
 }
 
-// Safe iff not a 180° reversal, in bounds, and not into a wall. Body collisions
-// during prediction are left to the rollback path (rare for a bot-trained model).
-function isSafeStep(dir, prevDir, hr, hc, gmap, rows, cols) {
+// Safe iff not a 180° reversal, in bounds, not into a wall, and not into an
+// occupied body cell. `occupied` is a Set of r*cols+c for the relevant bodies.
+function isSafeStep(dir, prevDir, hr, hc, occupied, gmap, rows, cols) {
     if (dir === (prevDir + 2) % 4) return false;
     const nr = hr + DR[dir], nc = hc + DC[dir];
     if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) return false;
     if (gmap[nr][nc] === 1) return false;
+    if (occupied.has(nr * cols + nc)) return false;
     return true;
 }
 
@@ -64,7 +72,7 @@ export default {
     name: 'PlaygroundIndexView',
     components: {
         PlayGround, MatchGround, ResultBoard,
-        LatencyDisplay, LatencyInjector, PredictionLog
+        LatencyDisplay, LatencyInjector, PredictionLog, SyncMonitor
     },
     setup() {
         const store = useStore();
@@ -92,6 +100,7 @@ export default {
         const rttMs      = ref(0);
         const injectedMs = ref(0);
         const logEntries = ref([]);
+        const syncEntries = ref([]);
 
         const initShadow = snake => ({
             body: snake.cells.map(c => ({ r: c.r, c: c.c })),
@@ -158,6 +167,7 @@ export default {
                     inferring = false;
                     shadowA = null; shadowB = null; confApple = null;
                     logEntries.value = [];
+                    syncEntries.value = [];
                     predictorA.reset();
                     predictorB.reset();
 
@@ -177,7 +187,17 @@ export default {
                         moveCount++;
                         const M = moveCount;
                         const fps = game.timedelta ? (1000 / game.timedelta).toFixed(0) : '?';
-                        console.log(`[Sync] tick=${M} | step=${snake0.step} | q=${snake0.direction_queue.length} | fps≈${fps} rtt=${rttMs.value.toFixed(0)} pred=${predictorA.canPredict()} | ahead=${snake0.step - M}`);
+                        syncEntries.value.push({
+                            id:    M,
+                            tick:  M,
+                            step:  snake0.step,
+                            q:     snake0.direction_queue.length,
+                            fps,
+                            rtt:   rttMs.value.toFixed(0),
+                            pred:  predictorA.canPredict(),
+                            ahead: snake0.step - M
+                        });
+                        if (syncEntries.value.length > MAX_SYNC) syncEntries.value.shift();
 
                         // ── Initialise the confirmed shadow on first move ───────
                         if (shadowA === null) { shadowA = initShadow(snake0); shadowB = initShadow(snake1); }
@@ -266,17 +286,28 @@ export default {
 
                                 // Simulate the lookahead from the confirmed shadow so the
                                 // result is independent of live (mid-animation) cell state.
+                                // Collision occupancy = both confirmed bodies minus their
+                                // tail tips (which vacate as the snake moves), growing as we
+                                // accept each predicted head.
+                                const occ = new Set();
+                                for (let i = 0; i < shadowA.body.length - 1; i++)
+                                    occ.add(shadowA.body[i].r * cols + shadowA.body[i].c);
+                                for (let i = 0; i < shadowB.body.length - 1; i++)
+                                    occ.add(shadowB.body[i].r * cols + shadowB.body[i].c);
+
                                 let hrA = baseA.headR, hcA = baseA.headC, pdA = baseA.dir;
                                 let hrB = baseB.headR, hcB = baseB.headC, pdB = baseB.dir;
                                 let aR = baseApple.r, aC = baseApple.c;
 
                                 for (let k = 0; k < LOOKAHEAD; k++) {
                                     const dA = pa[k], dB = pb[k];
-                                    if (!isSafeStep(dA, pdA, hrA, hcA, gmap, rows, cols)) break;
-                                    if (!isSafeStep(dB, pdB, hrB, hcB, gmap, rows, cols)) break;
+                                    if (!isSafeStep(dA, pdA, hrA, hcA, occ, gmap, rows, cols)) break;
+                                    if (!isSafeStep(dB, pdB, hrB, hcB, occ, gmap, rows, cols)) break;
 
                                     const nrA = hrA + DR[dA], ncA = hcA + DC[dA];
                                     const nrB = hrB + DR[dB], ncB = hcB + DC[dB];
+                                    if (nrA === nrB && ncA === ncB) break; // head-on collision
+
                                     const eatA = (nrA === aR && ncA === aC);
                                     const eatB = (nrB === aR && ncB === aC);
                                     if (eatA || eatB) { aR = -1; aC = -1; } // respawn unknown
@@ -289,6 +320,8 @@ export default {
                                     pending.push({ step: baseStep + k + 1,
                                         dirA: dA, dirB: dB, eatA, eatB, logA, logB });
 
+                                    occ.add(nrA * cols + ncA);
+                                    occ.add(nrB * cols + ncB);
                                     hrA = nrA; hcA = ncA; pdA = dA;
                                     hrB = nrB; hcB = ncB; pdB = dB;
                                 }
@@ -316,6 +349,10 @@ export default {
                             if (snake0.status === 'move' || snake1.status === 'move') {
                                 requestAnimationFrame(applyResult); return;
                             }
+                            // Reconcile to the last server-confirmed state: undo any
+                            // predicted steps rendered ahead but never verified (the
+                            // fatal move is never sent), so death shows at the real spot.
+                            game.rollback_to(moveCount + 1);
                             if (data.loser === "all" || data.loser === "A") snake0.status = "die";
                             if (data.loser === "all" || data.loser === "B") snake1.status = "die";
                             store.commit("updateLoser", data.loser);
@@ -336,9 +373,38 @@ export default {
             if (socket) socket.close();
         });
 
-        return { rttMs, injectedMs, logEntries };
+        return { rttMs, injectedMs, logEntries, syncEntries };
     }
 }
 </script>
 
-<style scoped></style>
+<style scoped>
+.dashboard {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    height: 88vh;
+    box-sizing: border-box;
+}
+.game-area {
+    flex: 1 1 auto;
+    position: relative;          /* anchor for ResultBoard */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    background: rgba(20, 20, 24, 0.45);
+    border: 1px solid #2c2c34;
+    border-radius: 12px;
+    overflow: hidden;
+}
+.sidebar {
+    flex: 0 0 360px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #444 transparent;
+}
+</style>

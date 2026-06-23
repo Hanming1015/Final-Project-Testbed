@@ -1,17 +1,17 @@
 <template>
-    <div class="latency-display">
-        <div class="panel-title">网络延迟</div>
+    <div class="panel latency-display">
+        <div class="panel-title">Network Latency</div>
         <div class="stat">
             <span class="label">RTT</span>
             <span class="value" :style="{ color: rttColor }">{{ rtt.toFixed(1) }} ms</span>
         </div>
         <div class="stat">
-            <span class="label">注入</span>
+            <span class="label">Injected</span>
             <span class="value">{{ injected }} ms</span>
         </div>
         <div class="divider"></div>
         <div class="stat">
-            <span class="label">有效</span>
+            <span class="label">Effective</span>
             <span class="value" :style="{ color: effectiveColor }">{{ effective.toFixed(1) }} ms</span>
         </div>
     </div>
@@ -35,7 +35,7 @@ export default {
             return '#f44336';
         };
 
-        const rttColor      = computed(() => colorFor(props.rtt));
+        const rttColor       = computed(() => colorFor(props.rtt));
         const effectiveColor = computed(() => colorFor(effective.value));
 
         return { effective, rttColor, effectiveColor };
@@ -44,36 +44,32 @@ export default {
 </script>
 
 <style scoped>
-.latency-display {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    background: rgba(0, 0, 0, 0.75);
-    color: #fff;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-family: monospace;
+.panel {
+    background: rgba(20, 20, 24, 0.92);
+    border: 1px solid #2c2c34;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #e8e8ea;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
-    z-index: 1000;
-    min-width: 160px;
     user-select: none;
 }
 .panel-title {
     font-size: 10px;
-    color: #aaa;
+    color: #8a8a92;
     text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 8px;
+    letter-spacing: 1.2px;
+    margin-bottom: 10px;
 }
 .stat {
     display: flex;
     justify-content: space-between;
     margin-bottom: 5px;
 }
-.label { color: #aaa; }
+.label { color: #8a8a92; }
 .value { font-weight: bold; }
 .divider {
-    border-top: 1px solid #444;
+    border-top: 1px solid #2c2c34;
     margin: 6px 0;
 }
 </style>

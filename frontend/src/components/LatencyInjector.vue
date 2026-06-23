@@ -1,7 +1,7 @@
 <template>
-    <div class="latency-injector">
+    <div class="panel latency-injector">
         <div class="header">
-            <span class="panel-title">延迟注入</span>
+            <span class="panel-title">Latency Injection</span>
             <button class="toggle-btn" :class="{ active: enabled }" @click="toggle">
                 {{ enabled ? 'ON' : 'OFF' }}
             </button>
@@ -18,7 +18,7 @@
         </div>
 
         <div class="value-row">
-            <span class="dim">前端注入</span>
+            <span class="dim">Client Injected</span>
             <span>{{ activeVal }} ms</span>
         </div>
     </div>
@@ -34,7 +34,7 @@ export default {
     },
     emits: ['update:modelValue'],
     setup(props, { emit }) {
-        const enabled  = ref(false);
+        const enabled   = ref(false);
         const sliderVal = ref(100);
 
         const activeVal = computed(() => enabled.value ? sliderVal.value : 0);
@@ -55,42 +55,38 @@ export default {
 </script>
 
 <style scoped>
-.latency-injector {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: rgba(0, 0, 0, 0.75);
-    color: #fff;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-family: monospace;
+.panel {
+    background: rgba(20, 20, 24, 0.92);
+    border: 1px solid #2c2c34;
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #e8e8ea;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 13px;
-    z-index: 1000;
-    min-width: 190px;
     user-select: none;
 }
 .header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 .panel-title {
     font-size: 10px;
-    color: #aaa;
+    color: #8a8a92;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
 }
 .toggle-btn {
-    background: #444;
-    color: #aaa;
+    background: #33333a;
+    color: #8a8a92;
     border: none;
     border-radius: 4px;
     padding: 2px 10px;
     cursor: pointer;
-    font-family: monospace;
+    font-family: inherit;
     font-size: 12px;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
 .toggle-btn.active {
     background: #4caf50;
@@ -107,5 +103,5 @@ export default {
     justify-content: space-between;
     font-size: 12px;
 }
-.dim { color: #aaa; }
+.dim { color: #8a8a92; }
 </style>
