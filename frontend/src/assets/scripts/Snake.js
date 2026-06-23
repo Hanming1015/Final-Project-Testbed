@@ -15,6 +15,11 @@ export class Snake extends AcGameObject {
         
         this.speed = 10; // cells per second
         this.direction = -1; // -1: no direction, 0: up, 1: right, 2: down, 3: left
+        // Queue of pending moves: each entry is { dir, eat }. The engine (GameMap)
+        // pops one entry per advance when check_ready passes. This is the single
+        // source of truth for "what move to apply next" — both real moves and
+        // predicted moves are enqueued here, so there is exactly one driver.
+        this.direction_queue = [];
         this.status = "idle"; // idle: not moving, move: moving, die: dead
 
         this.dr = [-1, 0, 1, 0];
@@ -49,6 +54,12 @@ export class Snake extends AcGameObject {
         this.direction = d;
     }
 
+    // Enqueue a move to be applied by the engine when both snakes are ready.
+    // dir: 0=up,1=right,2=down,3=left. eat: whether this move eats the apple.
+    enqueue_direction(dir, eat = false) {
+        this.direction_queue.push({ dir, eat });
+    }
+
     check_tail_increasing() {
         if (this.step <= 10) return true;
         if (this.step % 3 === 1) return true;
@@ -70,12 +81,39 @@ export class Snake extends AcGameObject {
 
     }
 
-    update_move() {    
+    // Apply one move discretely, with no animation: used by the engine to catch
+    // up when the render loop has fallen behind the server tick rate. Mirrors
+    // next_step() followed immediately by update_move()'s arrival branch.
+    apply_step_instant(dir, eat) {
+        const head = this.cells[0];
+        const next = new Cell(head.r + this.dr[dir], head.c + this.dc[dir]);
+        this.eye_direction = dir;
+        this.direction = -1;
+        this.step++;
+
+        const k = this.cells.length;
+        for (let i = k; i > 0; i--) {
+            this.cells[i] = JSON.parse(JSON.stringify(this.cells[i - 1]));
+        }
+
+        this.cells[0]   = next;
+        this.next_cell  = null;
+        this.status     = "idle";
+
+        if (!this.check_tail_increasing()) this.cells.pop();
+        if (eat && this.cells.length > 1) this.cells.pop();
+    }
+
+    update_move() {
         const dx = this.next_cell.x - this.cells[0].x;
         const dy = this.next_cell.y - this.cells[0].y;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        const move_distance = this.speed * this.timedelta / 1000;
 
-        if (distance < this.eps) { // reached the next cell
+        // Reached the next cell — or this frame's step would overshoot it (low fps).
+        // Snap to the target and finish, so the animation can never oscillate around
+        // it and stall the move queue.
+        if (distance < this.eps || move_distance >= distance) {
             this.cells[0] = this.next_cell;
             this.next_cell = null;
             this.status = "idle";
@@ -89,7 +127,6 @@ export class Snake extends AcGameObject {
             }
         } else {
             // distance moved in this frame
-            const move_distance = this.speed * this.timedelta / 1000;
             this.cells[0].x += move_distance * dx / distance;
             this.cells[0].y += move_distance * dy / distance;
         

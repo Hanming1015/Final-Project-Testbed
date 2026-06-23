@@ -21,11 +21,43 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 
 const MAX_LOG = 30;
+const PREDICTION_ENABLED = true;
+const LOOKAHEAD = 2; // K: predict this many steps ahead (RTT 200ms / tick 100ms)
+let _predId = 0;     // monotonic ID for log entries
+
+const DR = [-1, 0, 1, 0];
+const DC = [0, 1, 0, -1];
 
 function timestamp() {
     const d = new Date();
     const pad = (n, w = 2) => String(n).padStart(w, '0');
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3).slice(0, 2)}`;
+}
+
+// Safe iff not a 180° reversal, in bounds, and not into a wall. Body collisions
+// during prediction are left to the rollback path (rare for a bot-trained model).
+function isSafeStep(dir, prevDir, hr, hc, gmap, rows, cols) {
+    if (dir === (prevDir + 2) % 4) return false;
+    const nr = hr + DR[dir], nc = hc + DC[dir];
+    if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) return false;
+    if (gmap[nr][nc] === 1) return false;
+    return true;
+}
+
+// "Constrained" = at least one non-reverse neighbour of the (post-move) head is
+// blocked by a wall, boundary, or a body cell. This is the regime the model is
+// most accurate in, so we only spend predictions here. occupied is the union of
+// both snakes' body cells.
+function isConstrained(headR, headC, prevDir, occupied, gmap, rows, cols) {
+    const reverse = (prevDir + 2) % 4;
+    for (let d = 0; d < 4; d++) {
+        if (d === reverse) continue;
+        const nr = headR + DR[d], nc = headC + DC[d];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) return true;
+        if (gmap[nr][nc] === 1) return true;
+        if (occupied.has(nr * cols + nc)) return true;
+    }
+    return false;
 }
 
 export default {
@@ -38,23 +70,58 @@ export default {
         const store = useStore();
         const socUrl = `ws://localhost:3000/websocket/${store.state.user.token}/`;
 
-        let socket          = null;
-        let predictor       = null;
-        let localSnakeIdx   = 0;
-        let pingInterval    = null;
-        let pingSentAt      = null;
-        let pendingPrediction    = null;   // { id, dir } — waiting for next move to confirm
-        let skipNextPrediction  = false;  // true for one tick after a rollback
+        let socket       = null;
+        let predictorA   = null;  // subject = snake0 (server side A)
+        let predictorB   = null;  // subject = snake1 (server side B)
+        let pingInterval = null;
+        let pingSentAt   = null;
+
+        // ── Prediction / sync state ──────────────────────────────────────────
+        let moveCount = 0;     // confirmed server steps received
+        let pending   = [];    // FIFO of predicted ticks awaiting verification
+        let predEpoch = 0;     // bumped every move; invalidates stale predict().then
+        let gameEnded = false; // true once a result arrives
+        let inferring = false; // true while an ONNX run is in flight (prevents re-entry)
+
+        // Confirmed (server-authoritative) shadow of each snake, evolved purely
+        // from the move stream so features/predictions never read mid-animation
+        // live cells. body is head-first [{r,c}, ...]; dir is the last move.
+        let shadowA = null, shadowB = null;
+        let confApple = null;             // { r, c }
 
         const rttMs      = ref(0);
         const injectedMs = ref(0);
         const logEntries = ref([]);
 
+        const initShadow = snake => ({
+            body: snake.cells.map(c => ({ r: c.r, c: c.c })),
+            dir:  snake.eye_direction
+        });
+        // Evolve the shadow by one confirmed move, mirroring Snake's body rules:
+        // grow head; drop tail unless step≤10 or step%3==1; drop one more on eat.
+        const evolveShadow = (sh, dir, eat, step) => {
+            const h = sh.body[0];
+            sh.body.unshift({ r: h.r + DR[dir], c: h.c + DC[dir] });
+            if (!(step <= 10 || step % 3 === 1)) sh.body.pop();
+            if (eat && sh.body.length > 1) sh.body.pop();
+            sh.dir = dir;
+        };
+
+        function pushLog(player, stepLabel, predicted) {
+            const e = { id: ++_predId, time: timestamp(), player,
+                        step: stepLabel, predicted, status: 'pending', actual: null };
+            logEntries.value.push(e);
+            if (logEntries.value.length > MAX_LOG) logEntries.value.shift();
+            return e;
+        }
+
         onMounted(() => {
             store.commit("updateOpponent", { username: "Opponent" });
 
-            predictor = new SnakePredictor();
-            predictor.init().catch(err => console.error('[SnakePredictor] init failed:', err));
+            predictorA = new SnakePredictor();
+            predictorB = new SnakePredictor();
+            Promise.all([predictorA.init(), predictorB.init()])
+                .catch(err => console.error('[SnakePredictor] init failed:', err));
 
             socket = new WebSocket(socUrl);
 
@@ -77,93 +144,184 @@ export default {
                     if (pingSentAt !== null) {
                         const rtt = performance.now() - pingSentAt;
                         rttMs.value = rtt;
-                        // Effective latency = real RTT + frontend-injected one-way delay
-                        predictor.updateRTT(rtt + injectedMs.value);
-                        console.log(`[RTT] ${rtt.toFixed(2)} ms`);
+                        predictorA.updateRTT(rtt + injectedMs.value);
+                        predictorB.updateRTT(rtt + injectedMs.value);
                         pingSentAt = null;
                     }
 
                 } else if (data.event === "matching-success") {
+                    // Reset all per-game prediction/sync state
+                    pending = [];
+                    moveCount = 0;
+                    predEpoch++;          // invalidate any in-flight prediction
+                    gameEnded = false;
+                    inferring = false;
+                    shadowA = null; shadowB = null; confApple = null;
+                    logEntries.value = [];
+                    predictorA.reset();
+                    predictorB.reset();
+
                     store.commit("updateOpponent", { username: data.opponent_username });
                     setTimeout(() => { store.commit("updateStatus", "playing"); }, 1000);
                     store.commit("updateGamemap", data.game);
-                    localSnakeIdx = (String(store.state.user.id) === String(data.game.a_id)) ? 0 : 1;
 
                 } else if (data.event === "move") {
-                    // Front-end injection: delay processing to simulate one-way network latency
                     setTimeout(() => {
                         const game = store.state.playground.gameObject;
-                        if (!game) return;
+                        if (!game || gameEnded) return;
                         const [snake0, snake1] = game.snakes;
+                        const rows = game.rows, cols = game.cols;
+                        const gmap = store.state.playground.gamemap;
 
-                        const localSnake = game.snakes[localSnakeIdx];
-                        const oppSnake   = game.snakes[1 - localSnakeIdx];
+                        predEpoch++;                 // any in-flight predict is now stale
+                        moveCount++;
+                        const M = moveCount;
+                        const fps = game.timedelta ? (1000 / game.timedelta).toFixed(0) : '?';
+                        console.log(`[Sync] tick=${M} | step=${snake0.step} | q=${snake0.direction_queue.length} | fps≈${fps} rtt=${rttMs.value.toFixed(0)} pred=${predictorA.canPredict()} | ahead=${snake0.step - M}`);
 
-                        // Confirm or rollback the previous prediction against the opponent's actual direction
-                        if (pendingPrediction !== null) {
-                            const actualOppDir = localSnakeIdx === 0 ? data.b_direction : data.a_direction;
-                            const entry = logEntries.value.find(e => e.id === pendingPrediction.id);
-                            if (entry) {
-                                const isCorrect = actualOppDir === pendingPrediction.dir;
-                                entry.status = isCorrect ? 'correct' : 'rollback';
-                                entry.actual = actualOppDir;
-                                // On rollback: skip next prediction so the server-corrected
-                                // direction is visible for a full tick before prediction resumes
-                                if (!isCorrect) skipNextPrediction = true;
+                        // ── Initialise the confirmed shadow on first move ───────
+                        if (shadowA === null) { shadowA = initShadow(snake0); shadowB = initShadow(snake1); }
+
+                        // ── Verify the oldest pending prediction for this step ──
+                        let suppressed = false;
+                        if (pending.length > 0 && pending[0].step === M) {
+                            const p = pending.shift();
+                            const okA = data.a_direction === p.dirA && data.a_ate_apple === p.eatA;
+                            const okB = data.b_direction === p.dirB && data.b_ate_apple === p.eatB;
+                            p.logA.status = okA ? 'correct' : 'rollback'; p.logA.actual = data.a_direction;
+                            p.logB.status = okB ? 'correct' : 'rollback'; p.logB.actual = data.b_direction;
+
+                            if (okA && okB) {
+                                suppressed = true;   // engine already advanced step M correctly
+                            } else {
+                                // Undo step M and every prediction queued after it.
+                                // If the engine hasn't drained step M yet there is no
+                                // snapshot to restore — the snake is still at the
+                                // confirmed pre-M state, so just drop the queued moves.
+                                if (!game.rollback_to(M)) {
+                                    snake0.direction_queue = [];
+                                    snake1.direction_queue = [];
+                                }
+                                for (const q of pending) {
+                                    if (q.logA.status === 'pending') q.logA.status = 'expired';
+                                    if (q.logB.status === 'pending') q.logB.status = 'expired';
+                                }
+                                pending = [];
                             }
-                            pendingPrediction = null;
                         }
 
-                        snake0.set_direction(data.a_direction);
-                        snake1.set_direction(data.b_direction);
-                        snake0.eat_apple = data.a_ate_apple;
-                        snake1.eat_apple = data.b_ate_apple;
+                        // ── Apply the real move when not already (correctly) predicted ──
+                        if (!suppressed) {
+                            snake0.enqueue_direction(data.a_direction, data.a_ate_apple);
+                            snake1.enqueue_direction(data.b_direction, data.b_ate_apple);
+                        }
+
+                        // ── Authoritative apple + shadow update ─────────────────
                         game.apple.r = data.apple_r;
                         game.apple.c = data.apple_c;
+                        evolveShadow(shadowA, data.a_direction, data.a_ate_apple, M);
+                        evolveShadow(shadowB, data.b_direction, data.b_ate_apple, M);
+                        confApple = { r: data.apple_r, c: data.apple_c };
 
-                        if (game.apple) {
-                            const gamemap   = store.state.playground.gamemap;
-                            // Feed the predictor from the opponent's perspective
-                            const oppDir    = localSnakeIdx === 0 ? data.b_direction : data.a_direction;
-                            const oppJustAte = localSnakeIdx === 0 ? data.b_ate_apple : data.a_ate_apple;
+                        // ── Feed both predictors (exact post-move state) ────────
+                        const occupied = new Set();
+                        for (const c of shadowA.body) occupied.add(c.r * cols + c.c);
+                        for (const c of shadowB.body) occupied.add(c.r * cols + c.c);
+                        const headA = shadowA.body[0], headB = shadowB.body[0];
+                        predictorA.addFrame(data.a_direction, headA.r, headA.c, occupied, gmap,
+                                            game.apple.r, game.apple.c, data.a_ate_apple);
+                        predictorB.addFrame(data.b_direction, headB.r, headB.c, occupied, gmap,
+                                            game.apple.r, game.apple.c, data.b_ate_apple);
 
-                            predictor.addFrame(oppDir, oppSnake, localSnake, gamemap,
-                                               game.apple.r, game.apple.c, oppJustAte);
+                        // ── Refill the lookahead window when fully drained ──────
+                        // Gate on at least one snake being in a constrained position
+                        // (switch to consA && consB for the high-confidence-only regime).
+                        const consA = isConstrained(headA.r, headA.c, shadowA.dir, occupied, gmap, rows, cols);
+                        const consB = isConstrained(headB.r, headB.c, shadowB.dir, occupied, gmap, rows, cols);
 
-                            const canPredict = !skipNextPrediction;
-                            skipNextPrediction = false;
+                        if (PREDICTION_ENABLED && (consA && consB) && !inferring && pending.length === 0 &&
+                            predictorA.canPredict() && predictorB.canPredict()) {
 
-                            if (canPredict && predictor.shouldTrigger(oppDir, oppSnake, localSnake,
-                                                        gamemap, game.rows, game.cols)) {
-                                predictor.predict().then(predictedDir => {
-                                    if (predictedDir === null) return;
+                            const myEpoch = predEpoch;
+                            const baseStep = M;
+                            const baseA = { headR: shadowA.body[0].r, headC: shadowA.body[0].c, dir: shadowA.dir };
+                            const baseB = { headR: shadowB.body[0].r, headC: shadowB.body[0].c, dir: shadowB.dir };
+                            const baseApple = confApple;
 
-                                    const oppPlayerLabel = localSnakeIdx === 0 ? 'B' : 'A';
-                                    const entry = {
-                                        id: Date.now(),
-                                        time: timestamp(),
-                                        player: oppPlayerLabel,
-                                        predicted: predictedDir,
-                                        status: 'pending',
-                                        actual: null
-                                    };
-                                    logEntries.value.push(entry);
-                                    if (logEntries.value.length > MAX_LOG) logEntries.value.shift();
+                            inferring = true;
+                            (async () => {
+                                // Run the two models sequentially: the wasm backend cannot
+                                // run overlapping inferences on a session.
+                                let pa, pb;
+                                try {
+                                    pa = await predictorA.predict();
+                                    pb = await predictorB.predict();
+                                } finally {
+                                    inferring = false;
+                                }
 
-                                    pendingPrediction = { id: entry.id, dir: predictedDir };
-                                    console.log(`[SnakePredictor] trigger fired → predicted opp: ${predictedDir}`);
-                                    oppSnake.set_direction(predictedDir);
-                                });
-                            }
+                                if (myEpoch !== predEpoch || gameEnded) return; // stale / ended
+                                if (pa === null || pb === null) return;
+                                if (pending.length !== 0) return;               // already refilled
+
+                                // Simulate the lookahead from the confirmed shadow so the
+                                // result is independent of live (mid-animation) cell state.
+                                let hrA = baseA.headR, hcA = baseA.headC, pdA = baseA.dir;
+                                let hrB = baseB.headR, hcB = baseB.headC, pdB = baseB.dir;
+                                let aR = baseApple.r, aC = baseApple.c;
+
+                                for (let k = 0; k < LOOKAHEAD; k++) {
+                                    const dA = pa[k], dB = pb[k];
+                                    if (!isSafeStep(dA, pdA, hrA, hcA, gmap, rows, cols)) break;
+                                    if (!isSafeStep(dB, pdB, hrB, hcB, gmap, rows, cols)) break;
+
+                                    const nrA = hrA + DR[dA], ncA = hcA + DC[dA];
+                                    const nrB = hrB + DR[dB], ncB = hcB + DC[dB];
+                                    const eatA = (nrA === aR && ncA === aC);
+                                    const eatB = (nrB === aR && ncB === aC);
+                                    if (eatA || eatB) { aR = -1; aC = -1; } // respawn unknown
+
+                                    snake0.enqueue_direction(dA, eatA);
+                                    snake1.enqueue_direction(dB, eatB);
+
+                                    const logA = pushLog('A', `t+${k + 1}`, dA);
+                                    const logB = pushLog('B', `t+${k + 1}`, dB);
+                                    pending.push({ step: baseStep + k + 1,
+                                        dirA: dA, dirB: dB, eatA, eatB, logA, logB });
+
+                                    hrA = nrA; hcA = ncA; pdA = dA;
+                                    hrB = nrB; hcB = ncB; pdB = dB;
+                                }
+                            })();
                         }
                     }, injectedMs.value);
 
                 } else if (data.event === "result") {
-                    const game = store.state.playground.gameObject;
-                    const [snake0, snake1] = game.snakes;
-                    if (data.loser === "all" || data.loser === "A") snake0.status = "die";
-                    if (data.loser === "all" || data.loser === "B") snake1.status = "die";
-                    store.commit("updateLoser", data.loser);
+                    // Stop further advancement immediately so the engine cannot drain
+                    // queued predictions past the end of the game.
+                    gameEnded = true;
+                    pending = [];
+                    const g = store.state.playground.gameObject;
+                    if (g) {
+                        g.snakes[0].direction_queue = [];
+                        g.snakes[1].direction_queue = [];
+                    }
+
+                    setTimeout(() => {
+                        const game = store.state.playground.gameObject;
+                        if (!game) return;
+                        const [snake0, snake1] = game.snakes;
+                        // Let any in-progress animation finish before showing death.
+                        const applyResult = () => {
+                            if (snake0.status === 'move' || snake1.status === 'move') {
+                                requestAnimationFrame(applyResult); return;
+                            }
+                            if (data.loser === "all" || data.loser === "A") snake0.status = "die";
+                            if (data.loser === "all" || data.loser === "B") snake1.status = "die";
+                            store.commit("updateLoser", data.loser);
+                        };
+                        requestAnimationFrame(applyResult);
+                    }, injectedMs.value);
                 }
             };
 

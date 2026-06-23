@@ -11,11 +11,13 @@
             >
                 <span class="time">{{ entry.time }}</span>
                 <span class="player">{{ entry.player }}</span>
+                <span class="step-badge">{{ entry.step }}</span>
                 <span class="dir">{{ DIR[entry.predicted] }}</span>
                 <span class="sep">→</span>
                 <span class="result">
                     <template v-if="entry.status === 'pending'">…</template>
                     <template v-else-if="entry.status === 'correct'">✓ 正确</template>
+                    <template v-else-if="entry.status === 'expired'">— 已过期</template>
                     <template v-else>✗ 回滚 (服务器: {{ DIR[entry.actual] }})</template>
                 </span>
             </div>
@@ -90,10 +92,12 @@ export default {
 }
 .log-entry:last-child { border-bottom: none; }
 .time   { color: #555; font-size: 10px; min-width: 70px; }
-.player { color: #888; font-size: 10px; min-width: 18px; }
+.player     { color: #888; font-size: 10px; min-width: 18px; }
+.step-badge { color: #aaa; font-size: 9px; min-width: 28px; }
 .dir    { color: #fff; font-weight: bold; min-width: 14px; }
 .sep    { color: #444; }
 .log-entry.pending  .result { color: #888; }
 .log-entry.correct  .result { color: #4caf50; }
 .log-entry.rollback .result { color: #f44336; }
+.log-entry.expired  .result { color: #555; }
 </style>

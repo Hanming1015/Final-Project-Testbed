@@ -23,7 +23,7 @@ public class Game extends Thread{
     public final static int[] dy = {0, 1, 0, -1};
 
     private final Player playerA, playerB;
-    private final boolean botA, botB;
+    private final boolean botA, botB, watchMode;
     private final Bot bot;
 
     private Integer nextStepA = 0;  // A default up
@@ -40,22 +40,28 @@ public class Game extends Thread{
     private final List<String[]> telemetryBuffer; // [playerId, rowData]
 
     public Game(Integer rows, Integer cols, Integer innerWallsCount, String idA, String idB) {
-        this(rows, cols, innerWallsCount, idA, idB, false, false);
+        this(rows, cols, innerWallsCount, idA, idB, false, false, false);
     }
 
     public Game(Integer rows, Integer cols, Integer innerWallsCount,
                 String idA, String idB, boolean botA, boolean botB) {
+        this(rows, cols, innerWallsCount, idA, idB, botA, botB, false);
+    }
+
+    public Game(Integer rows, Integer cols, Integer innerWallsCount,
+                String idA, String idB, boolean botA, boolean botB, boolean watchMode) {
         this.rows = rows;
         this.cols = cols;
         this.innerWallsCount = innerWallsCount;
         this.g = new int[rows][cols];
         this.botA = botA;
         this.botB = botB;
+        this.watchMode = watchMode;
         this.bot = (botA || botB) ? new Bot(rows, cols) : null;
         this.playerA = new Player(idA, rows - 2, 1, new ArrayList<>());
         this.playerB = new Player(idB, 1, cols - 2, new ArrayList<>());
-        // Only collect telemetry for bot games to keep training data clean
-        this.telemetryBuffer = (botA || botB) ? new ArrayList<>() : null;
+        // Only collect telemetry for silent bot games to keep training data clean
+        this.telemetryBuffer = (botA && botB && !watchMode) ? new ArrayList<>() : null;
     }
 
     public Player getPlayerA() {
@@ -157,7 +163,7 @@ public class Game extends Thread{
     }
 
     private void nextStep() {
-        if (!botA || !botB) {
+        if (!botA || !botB || watchMode) {
             try {
                 Thread.sleep(100);
             } catch (InterruptedException e) {

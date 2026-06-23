@@ -33,6 +33,7 @@ export class AcGameObject {
 }
 
 let last_timestamp; // timestamp of the previous frame
+let raf_id;         // id of the currently scheduled frame
 
 const step = timestamp => {
     for (let obj of AC_GAME_OBJECTS) {
@@ -45,7 +46,14 @@ const step = timestamp => {
         }
     }
     last_timestamp = timestamp;
-    requestAnimationFrame(step);
+    raf_id = requestAnimationFrame(step);
 }
 
-requestAnimationFrame(step);
+raf_id = requestAnimationFrame(step);
+
+// Hot-reload guard (dev only): cancel this module's render loop before a hot
+// update starts a new one, otherwise overlapping rAF loops accumulate and tank
+// fps. No effect in production builds (module.hot is undefined).
+if (module.hot) {
+    module.hot.dispose(() => cancelAnimationFrame(raf_id));
+}

@@ -122,6 +122,52 @@ public class WebSocketServer {
         }
     }
 
+    public void startWatchGame() {
+        Game game = new Game(25, 28, 40, this.user.getId(), "botB", true, true, true);
+        game.createMap();
+        this.game = game;
+        game.start();
+
+        JSONObject respGame = new JSONObject();
+        respGame.put("a_id", game.getPlayerA().getId());
+        respGame.put("a_sx", game.getPlayerA().getSx());
+        respGame.put("a_sy", game.getPlayerA().getSy());
+        respGame.put("b_id", game.getPlayerB().getId());
+        respGame.put("b_sx", game.getPlayerB().getSx());
+        respGame.put("b_sy", game.getPlayerB().getSy());
+        respGame.put("map", game.getG());
+
+        JSONObject resp = new JSONObject();
+        resp.put("event", "matching-success");
+        resp.put("opponent_username", "Bot");
+        resp.put("game", respGame);
+        sendMessage(resp.toJSONString());
+    }
+
+    public void startBotGame() {
+        String botId = "bot";
+
+        Game game = new Game(25, 28, 40, this.user.getId(), botId, false, true);
+        game.createMap();
+        this.game = game;
+        game.start();
+
+        JSONObject respGame = new JSONObject();
+        respGame.put("a_id", game.getPlayerA().getId());
+        respGame.put("a_sx", game.getPlayerA().getSx());
+        respGame.put("a_sy", game.getPlayerA().getSy());
+        respGame.put("b_id", game.getPlayerB().getId());
+        respGame.put("b_sx", game.getPlayerB().getSx());
+        respGame.put("b_sy", game.getPlayerB().getSy());
+        respGame.put("map", game.getG());
+
+        JSONObject resp = new JSONObject();
+        resp.put("event", "matching-success");
+        resp.put("opponent_username", "Bot");
+        resp.put("game", respGame);
+        sendMessage(resp.toJSONString());
+    }
+
     @OnMessage
     public void onMessage(String message, Session session) {
         System.out.println("receive message");
@@ -133,6 +179,10 @@ public class WebSocketServer {
             stopMatching();
         } else if (event.equals("move")) {
             move(jsonObject.getInteger("direction"));
+        } else if (event.equals("start-bot-game")) {
+            startBotGame();
+        } else if (event.equals("start-watch-game")) {
+            startWatchGame();
         } else if (event.equals("ping")) {
             JSONObject pong = new JSONObject();
             pong.put("event", "pong");

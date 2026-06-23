@@ -3,6 +3,29 @@ import { Snake } from "./Snake";
 import { Wall } from "./Wall";
 import { Apple } from "./Apple";
 
+const HISTORY_LIMIT = 6;
+
+// Discrete snapshot of a snake. Taken only while the snake is idle, so pixel
+// positions (x,y) coincide with grid positions and the snapshot is exact.
+export function snapSnake(snake) {
+    return {
+        cells:         snake.cells.map(c => ({ r: c.r, c: c.c, x: c.x, y: c.y })),
+        step:          snake.step,
+        eye_direction: snake.eye_direction
+    };
+}
+
+export function restoreSnake(snake, snap) {
+    snake.cells           = snap.cells.map(c => ({ r: c.r, c: c.c, x: c.x, y: c.y }));
+    snake.next_cell       = null;
+    snake.status          = "idle";
+    snake.direction       = -1;
+    snake.direction_queue = [];
+    snake.step            = snap.step;
+    snake.eye_direction   = snap.eye_direction;
+    snake.eat_apple       = false;
+}
+
 export class GameMap extends AcGameObject {
     constructor(ctx, parent, store) {
         super();
@@ -23,6 +46,10 @@ export class GameMap extends AcGameObject {
         ];
 
         this.apple = null;
+
+        // Ring buffer of pre-advance snapshots, tagged with the step each advance
+        // produced. Used by rollback_to() to undo mispredicted moves.
+        this.history = [];
     }
 
     create_walls() {
@@ -86,23 +113,81 @@ export class GameMap extends AcGameObject {
     check_ready() {
         for (const snake of this.snakes) {
             if (snake.status !== "idle") return false;
-            if (snake.direction === -1) return false;
+            if (snake.direction_queue.length === 0) return false;
         }
         return true;
     }
 
     next_step() {
+        // Snapshot the pre-advance state for potential rollback. Both snakes are
+        // idle here (guaranteed by check_ready), so the snapshot is exact.
+        const targetStep = this.snakes[0].step + 1;
+        this.history.push({ targetStep, snaps: this.snakes.map(snapSnake) });
+        if (this.history.length > HISTORY_LIMIT) this.history.shift();
+
         for (const snake of this.snakes) {
-            snake.next_step();
+            const move = snake.direction_queue.shift();
+            snake.direction = move.dir;
+            snake.eat_apple = move.eat;
         }
+        for (const snake of this.snakes) snake.next_step();
+    }
+
+    // Undo the move that produced `targetStep` (and everything after it): restore
+    // both snakes to their pre-`targetStep` state and clear pending moves.
+    // Returns true if a matching snapshot was found.
+    rollback_to(targetStep) {
+        const idx = this.history.findIndex(h => h.targetStep === targetStep);
+        if (idx === -1) return false;
+        const h = this.history[idx];
+        restoreSnake(this.snakes[0], h.snaps[0]);
+        restoreSnake(this.snakes[1], h.snaps[1]);
+        this.history.length = idx; // drop this snapshot and all later ones
+        return true;
     }
 
     update() {
         this.update_size();
-        if (this.check_ready()) {
-            this.next_step();
-        }
+        this.advance();
         this.render();
+    }
+
+    // Drain the move queue. When the backlog exceeds MAX_LAG (we have fallen
+    // behind the server tick rate, e.g. on an fps dip), fast-forward the oldest
+    // confirmed moves with no animation so rendering catches up; always leave a
+    // small lead (the prediction lookahead) to animate smoothly.
+    advance() {
+        const MAX_LAG = 2;
+        while (this.check_ready()) {
+            const backlog = Math.min(
+                this.snakes[0].direction_queue.length,
+                this.snakes[1].direction_queue.length
+            );
+            if (backlog > MAX_LAG) {
+                this.instant_step();
+            } else {
+                this.next_step();
+                break; // one animated step per frame
+            }
+        }
+    }
+
+    instant_step() {
+        const targetStep = this.snakes[0].step + 1;
+        this.history.push({ targetStep, snaps: this.snakes.map(snapSnake) });
+        if (this.history.length > HISTORY_LIMIT) this.history.shift();
+
+        for (const snake of this.snakes) {
+            const move = snake.direction_queue.shift();
+            snake.apply_step_instant(move.dir, move.eat);
+        }
+    }
+
+    destroy() {
+        for (const snake of this.snakes) snake.destroy();
+        for (const wall of this.walls) wall.destroy();
+        if (this.apple) this.apple.destroy();
+        super.destroy();
     }
 
     render() {

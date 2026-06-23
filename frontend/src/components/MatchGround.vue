@@ -13,6 +13,8 @@
             </div>
             <div class="col-12" style="text-align: center; padding-top: 15vh;">
                 <button @click="click_match_btn" type="button" class="btn btn-warning btn-lg">{{ match_btn_info }}</button>
+                <button @click="click_bot_btn" type="button" class="btn btn-info btn-lg" style="margin-left: 20px;">Play vs Bot</button>
+                <button @click="click_watch_btn" type="button" class="btn btn-secondary btn-lg" style="margin-left: 20px;">Watch Bot vs Bot</button>
             </div>
         </div>
     </div>
@@ -44,9 +46,23 @@ export default {
             }
         }
 
+        const click_bot_btn = () => {
+            store.state.playground.socket.send(JSON.stringify({
+                event: "start-bot-game",
+            }));
+        }
+
+        const click_watch_btn = () => {
+            store.state.playground.socket.send(JSON.stringify({
+                event: "start-watch-game",
+            }));
+        }
+
         return {
             match_btn_info,
-            click_match_btn
+            click_match_btn,
+            click_bot_btn,
+            click_watch_btn,
         }
     }
 };

@@ -6,7 +6,7 @@
 
 <script>
 import { GameMap } from '@/assets/scripts/GameMap';
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useStore } from 'vuex';
 
 export default {
@@ -15,15 +15,18 @@ export default {
         const store = useStore();
         let parent = ref(null);
         let canvas = ref(null);
+        let game = null;
 
         onMounted(() => {
-            store.commit('updateGameObject', new GameMap(canvas.value.getContext('2d'), parent.value, store));
+            game = new GameMap(canvas.value.getContext('2d'), parent.value, store);
+            store.commit('updateGameObject', game);
         });
 
-        return {
-            parent,
-            canvas
-        }
+        onUnmounted(() => {
+            if (game) { game.destroy(); game = null; }
+        });
+
+        return { parent, canvas };
     }
 }
 </script>
