@@ -19,10 +19,10 @@
                 {{ match_btn_info }}
             </button>
             <button @click="click_bot_btn" type="button" class="tb-btn">
-                Play vs Bot
+                Player vs Bot
             </button>
             <button @click="click_watch_btn" type="button" class="tb-btn">
-                Watch Bot vs Bot
+                Bot vs Bot
             </button>
         </div>
     </div>

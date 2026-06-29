@@ -170,7 +170,7 @@ public class WebSocketServer {
 
     @OnMessage
     public void onMessage(String message, Session session) {
-        System.out.println("receive message");
+        //System.out.println("receive message");
         JSONObject jsonObject = JSONObject.parseObject(message);
         String event = jsonObject.getString("event");
         if (event.equals("start-matching")) {

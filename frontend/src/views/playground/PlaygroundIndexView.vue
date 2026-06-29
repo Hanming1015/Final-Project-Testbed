@@ -195,7 +195,7 @@ export default {
                             fps,
                             rtt:   rttMs.value.toFixed(0),
                             pred:  predictorA.canPredict(),
-                            ahead: snake0.step - M
+                            ahead: snake0.step - (M - 1)
                         });
                         if (syncEntries.value.length > MAX_SYNC) syncEntries.value.shift();
 

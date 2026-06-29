@@ -75,6 +75,7 @@ export default {
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: #cbd5e1 transparent;
+    user-select: text;
 }
 .empty {
     color: var(--tb-muted-2);
