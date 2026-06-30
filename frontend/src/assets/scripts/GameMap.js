@@ -50,6 +50,13 @@ export class GameMap extends AcGameObject {
         // Ring buffer of pre-advance snapshots, tagged with the step each advance
         // produced. Used by rollback_to() to undo mispredicted moves.
         this.history = [];
+
+        // Largest backlog that is still animated smoothly; anything beyond it is
+        // fast-forwarded (instant_step) so the render snaps to the newest server
+        // state. The view sets this per tick: high while predicting (so the
+        // predicted lookahead lead animates), low when silent (so a confirmed
+        // backlog from a finished latency spike catches up instantly).
+        this.maxLag = 3;
     }
 
     create_walls() {
@@ -157,10 +164,11 @@ export class GameMap extends AcGameObject {
     // confirmed moves with no animation so rendering catches up; always leave a
     // small lead (the prediction lookahead) to animate smoothly.
     advance() {
-        // Legitimate backlog = up to 2 predicted (lookahead) + 1 in-flight real
-        // move = 3. Only fast-forward when genuinely behind that (e.g. fps dip),
-        // so a normal prediction burst animates smoothly instead of teleporting.
-        const MAX_LAG = 3;
+        // Legitimate backlog = the predicted lookahead lead + 1 in-flight real
+        // move. Only fast-forward when genuinely behind that, so a normal
+        // prediction burst animates smoothly instead of teleporting. When silent
+        // the budget drops (see maxLag) so a spike's flushed backlog snaps.
+        const MAX_LAG = this.maxLag;
         while (this.check_ready()) {
             const backlog = Math.min(
                 this.snakes[0].direction_queue.length,

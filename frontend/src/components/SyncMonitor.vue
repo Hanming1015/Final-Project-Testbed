@@ -27,7 +27,10 @@ export default {
     setup(props) {
         const body = ref(null);
 
-        const aheadClass = a => (a > 0 ? 'pos' : a < 0 ? 'neg' : 'zero');
+        // -1 is the normal baseline (render lags one step behind the latest
+        // confirmed move). 0 or above = caught up / predicting ahead (good);
+        // below -1 = genuinely falling behind (bad).
+        const aheadClass = a => (a >= 0 ? 'pos' : a === -1 ? 'zero' : 'neg');
 
         watch(
             () => props.entries.length,

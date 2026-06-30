@@ -20,6 +20,11 @@
                     <template v-else-if="entry.status === 'expired'">— expired</template>
                     <template v-else>✗ rollback (server: {{ DIR[entry.actual] }})</template>
                 </span>
+                <span
+                    v-if="entry.status === 'correct' || entry.status === 'rollback'"
+                    class="glide"
+                    :class="{ on: entry.glided }"
+                >{{ entry.glided ? '● on-screen' : '○ queued' }}</span>
             </div>
         </div>
     </div>
@@ -100,4 +105,6 @@ export default {
 .log-entry.correct  .result { color: var(--tb-success); }
 .log-entry.rollback .result { color: var(--tb-danger); }
 .log-entry.expired  .result { color: var(--tb-muted-2); }
+.glide { margin-left: auto; font-size: 9px; color: var(--tb-muted-2); white-space: nowrap; }
+.glide.on { color: var(--tb-accent); font-weight: 700; }
 </style>

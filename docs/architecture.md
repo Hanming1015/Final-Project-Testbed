@@ -9,10 +9,7 @@
   - [The `ahead` metric](#the-ahead-metric)
 - [5. Key Design Rationale (Supervisor Q&A)](#5-key-design-rationale-supervisor-qa)
   - [Q7 follow-up — variable latency / autoregressive](#q7-follow-up--latency-fluctuates--is-non-integer-doesnt-2-step-prediction-break-why-not-dynamicautoregressive-prediction)
-- [6. Reading `ahead` correctly — two kinds of "in sync"](#6-reading-ahead-correctly--two-kinds-of-in-sync)
-  - [The three-walker model](#the-three-walker-model)
-  - [Timeline: client vs server (200ms latency)](#timeline-where-the-client-is-vs-the-server-200ms-latency)
-  - [Why `ahead` can't be held at +2](#why-ahead-cant-be-held-at-2-mechanism-recap)
+- [6. Reading `ahead` correctly — the three-walker model](#6-reading-ahead-correctly--the-three-walker-model)
 
 ---
 
@@ -53,8 +50,8 @@ flowchart TB
 
         subgraph UI["Dashboard / Instrumentation"]
             GM["Game Render"]
-            CTRL["INPUTS:<br/>LatencyInjector"]
-            OBS["OUTPUTS:<br/>LatencyDisplay · PredictionLog · SyncMonitor"]
+            CTRL["INPUTS:<br/>SpikeInjector · ModelToggle"]
+            OBS["OUTPUTS:<br/>PredictionStats · PredictionTrace · SyncMonitor"]
         end
     end
 
@@ -69,7 +66,7 @@ flowchart TB
     PEND -->|"mismatch → rollback"| HIST --> CR
 
     GM --> OBS
-    CTRL -->|"inject artificial latency"| WS
+    CTRL -->|"inject latency spike / toggle model"| WS
 ```
 
 ## 2. Prediction / Reconciliation Loop (per tick)
@@ -99,45 +96,54 @@ sequenceDiagram
 ## 3. One-line summary
 
 A **learned sequence model (GRU Seq2Seq)** does **client-side latency compensation** in a
-**server-authoritative** game. The server owns truth and creates the latency gap; the client
-predicts up to **2 steps** (RTT 200ms / tick 100ms) for **both** snakes, renders them
+**server-authoritative** game. The server owns truth and creates the latency gap; whenever a
+confirmed move is **overdue** (clock-driven, "route-B" — not a measured RTT) the client
+predicts up to **2 steps** ahead (K = horizon; tick 100ms) for **both** snakes, renders them
 immediately, and **verifies + rolls back** against real server moves. Training data comes
-from **bot self-play** in the same engine. A **dashboard** makes latency, predictions, and
-sync **observable and controllable** for systematic experiments.
+from **bot self-play** in the same engine. A **dashboard** makes a latency **spike**,
+predictions, and sync **observable and controllable** for systematic experiments.
 
 ---
 
 ## 4. Dashboard Components (Instrumentation Layer)
 
-The four panels turn invisible latency compensation into something **observable and
-controllable**. Two are **inputs (controls)**, two are **outputs (observability)**.
+The panels turn invisible latency compensation into something **observable and
+controllable**. Two are **inputs (controls)**, three are **outputs (observability)**.
 
 | Panel | Role | Type |
 |---|---|---|
-| **LatencyInjector** | Inject artificial latency via a slider to **reproduce specific network conditions on demand** → makes experiments repeatable. | INPUT |
-| **LatencyDisplay** | Show latency in real time: **RTT** (measured by ping-pong), **Injected** (artificial), **Effective** (total compensated). Color-coded. | OUTPUT |
-| **PredictionLog** | Log every prediction vs the server's real move: **correct** / **rollback** (wrong → reverted to server) / **expired** (superseded). = the model's **live deployment accuracy**, comparable to offline eval. | OUTPUT |
+| **SpikeInjector** | Arm a transient latency **spike** — magnitude (`ms`) × duration (`ticks`) — to reproduce a specific gap on demand → makes experiments repeatable. | INPUT |
+| **ModelToggle** | Enable / disable the prediction layer at runtime to **A/B** the compensated behaviour against the raw **no-prediction baseline**. | INPUT |
+| **PredictionStats** | Cumulative metrics: glides, verified steps, accuracy (Snake A / B), **masked %** (correct & on-screen), **visible-rollback %** (wrong & on-screen), expired. = the model's **live deployment accuracy**, comparable to offline eval. | OUTPUT |
+| **PredictionTrace** | Per-event mirror of the console: each **PREDICT** (overdue → glide K) and **VERIFY** (✓ / ✗ rollback, on-screen vs still-queued). | OUTPUT |
 | **SyncMonitor** | Track client↔server sync per tick: step, queue depth, fps, pred/idle, and **`ahead`**. Main debugging tool for desync/drift. | OUTPUT |
 
-**Demo order (cause → effect):** LatencyInjector (add pressure) → LatencyDisplay (see
-latency rise) → SyncMonitor (see `ahead` rise) → PredictionLog (see accuracy).
+> `LatencyInjector` / `LatencyDisplay` (constant-latency controls) are retained in the
+> codebase but **hidden** (`v-if="false"`) for the current spike-only testing.
+
+**Demo order (cause → effect):** SpikeInjector (inject a gap) → SyncMonitor (see `ahead`
+rise / felt lag) → PredictionTrace (see the glide & verifies) → PredictionStats (see
+accuracy). Flip **ModelToggle** off to compare against the raw baseline.
 
 ### The `ahead` metric
 
 **`ahead = engine step (snake0.step) − confirmed server moves (moveCount)`**
-= how many **predicted-but-unconfirmed** steps the client is rendering beyond the server.
+= the rendered step relative to the latest confirmed move `M`. The render normally sits **one
+step behind `M`** (the 100 ms cell animation is always in flight), so the resting value is **−1**.
 
 | `ahead` | Meaning | Verdict |
 |---|---|---|
-| **2** | Buffer full — client leads server by 2 steps; both predicted steps rendered, fully hiding the ~200ms RTT (K=2). | ✅ Ideal under latency — prediction at full load |
-| **1** | Leading by 1 predicted step — buffer filling, or compensating ~100ms. | ✅ Normal — prediction working |
-| **0** | Lockstep — client exactly at the server's confirmed state, no prediction lead. | ⚪ Normal in no-latency mode; or just reconciled |
-| **−1** | Client fell **behind** the server by one move and is **catching up** (not predicting). | ⚠️ Fine if transient (instant_step recovers); persistent = problem |
+| **+2** | Two predicted steps rendered ahead of `M` — full ~200ms mask (only reachable on a spike longer than 2 ticks). | ✅ Peak compensation |
+| **+1** | One predicted step ahead of `M` — latency being masked. | ✅ Prediction working |
+| **0** | Caught up exactly to the latest confirmed move `M` (one step ahead of the resting baseline). | ✅ Compensation engaged |
+| **−1** | Resting baseline — render is one step behind `M` because of the 100 ms animation. | ⚪ Normal / healthy |
+| **≤ −2** | Fell genuinely behind `M` and is catching up. | ⚠️ Fine if transient; persistent = problem |
 
-**Why it fluctuates:** a *prediction* pushes `ahead` up (+1/+2); a server *confirmation*
-cashes that step in (falls back); a *rollback* drops the bad lead (back to 0 / −1). So the
-0/1/2 oscillation is the **predict → reconcile → occasionally roll back** cycle made visible.
-No latency → sits near 0/−1; with latency → rises to +1/+2, proving compensation works.
+**Why it fluctuates:** a *prediction* pushes `ahead` up (−1 → 0 → +1/+2); a server
+*confirmation* cashes a step in (falls back); a *rollback* drops a bad lead. No latency → sits
+at **−1**; a spike → rises toward +1/+2 then decays back to −1, proving compensation works.
+For the full mental model and a tick-by-tick spike walkthrough see
+[The Three-Walker Model](./walker-model.md).
 
 ---
 
@@ -216,128 +222,27 @@ robust fixed horizon and treat adaptive autoregressive prediction as the clear n
 
 ---
 
-## 6. Reading `ahead` correctly — two kinds of "in sync"
+## 6. Reading `ahead` correctly — the three-walker model
 
-The most common point of confusion: under 200ms injection the silent-model baseline shows
-`ahead = 0`, which *looks* synced — yet the client is genuinely 2 ticks behind the server.
-Both are true, because **`ahead` does not measure lag behind real-time**.
+`ahead` is easy to misread, because "in sync with the data I've **received**" is not the
+same as "in sync with the server's **real-time now**". The clearest way to reason about it —
+three walkers (rendered / known / server-now), the `felt lag = latency − ahead` relation, and
+**tick-by-tick walkthroughs of a latency spike** — lives in its own document:
 
-`ahead = step − (M−1)`, where `M` = moves the client has **received**. But received moves are
-**200ms (2 ticks) old**. So `ahead` measures *"rendered vs my delayed knowledge"*, not
-*"rendered vs the server's actual now"*.
+➡️ **[The Three-Walker Model](./walker-model.md)**
 
-```
-server's real "now":      step 22      ← where the server actually is
-                            │
-                       (200ms in flight = 2 ticks)
-                            │
-latest move received (M):  step 20      ← moves 21, 22 still on the wire
-                            │
-  ahead = 0  → render step 20  = synced with delayed data, but 2 ticks behind reality ❌
-  ahead = +2 → render step 22  = caught up to the server's now, latency hidden ✅
-```
-
-So there are **two different "in sync"**:
-- **Synced with received data** (`ahead = 0`) — smooth and self-consistent, but living ~2
-  ticks in the past. This is the silent-model / no-prediction state.
-- **Synced with server real-time** (`ahead = +2`) — prediction has bridged the 2-tick gap.
-  This is the goal latency compensation aims for.
-
-`ahead` measures the *extra* steps you've bet forward on top of your delayed knowledge;
-betting the full +2 is exactly what cancels the 2-tick real-time lag. (In bot-vs-bot the
-real-time lag is invisible — no local input / reference frame — so `ahead = 0` looks fine to
-the eye even though the render is 200ms stale. The constraint gate makes +2 only
-intermittent — see below.)
-
-### The three-walker model
-
-The clearest way to see what `ahead` means: picture **three walkers** moving the same
-direction (increasing step), with 200ms latency = 2 ticks.
+It also covers what each **spike parameter** means (magnitude = depth, duration = width), the
+**no-freeze condition** for the current single-shot trigger:
 
 ```
-walking direction  →→→→→
-
- step:        18     19     20            21     22
-                            │                     │
-                         walker2               walker3
-                       "truth I know"        "server's now"
-                       (latest move M)        (server real-time)
-                            ●━━━━━━━ 2 ticks ━━━━━━━●
-                            └──── fixed gap = the latency ────┘
-                               (= 200ms / 100ms = 2), un-closeable
-
- walker1 "what I've rendered" can stand at:
-    ahead = -1 : step19  → behind even my known truth (fps dip / catching up)
-    ahead =  0 : step20  → on top of walker2 (the silent-model state)
-    ahead = +1 : step21  → bet 1 tick forward
-    ahead = +2 : step22  → caught up to walker3 → real-time, latency hidden
+masked with no freeze  ⟺  m + n − 1 ≤ K      (m = ms/100, n = ticks, K = horizon = 2)
 ```
 
-**Fact 1 — all three walk at the same speed (1 step / 100ms).** Server ticks once per 100ms;
-moves arrive at the same rate (just 200ms late); the engine drains one step per 100ms
-(speed 10 → 100ms/step). Equal speeds ⇒ the gaps between them are constant.
+so the reproducible "spike is invisible" demo is **`200 ms × 1 tick`** (Case A), while the
+default **`200 ms × 2 ticks`** (Case B) shows the graceful **freeze + snap** floor. The doc
+ends with the **rolling top-up** design extension (`freeze ⟺ m > K` — duration absorbed) and
+why beating depth `> K` is a **predictability** limit reserved for *future work*.
 
-**Fact 2 — prediction can never move walker2.** walker2 trails walker3 by exactly
-`latency / tick` (= 2) — that gap *is* the latency, because you cannot know the truth sooner
-than it arrives. If latency rises to 300ms, walker2 falls 3 behind; jitter makes that distance
-fluctuate (this is what an adaptive horizon would track).
-
-**Fact 3 — prediction only moves walker1**, anywhere from walker2 (no prediction) up to
-walker3 (full prediction). Two quantities follow, and they must not be confused:
-
-| Quantity | Meaning | Who reports it |
-|---|---|---|
-| **`ahead`** | walker1 − walker2 | SyncMonitor: "steps I bet forward on top of known truth" |
-| **felt lag** | walker3 − walker1 | what you actually experience on screen |
-
-They are **complementary**:
-
-> felt lag = (walker3 − walker2) − (walker1 − walker2) = **latency − ahead = 2 − ahead**
-
-So `ahead = 0` → felt lag 2 ticks; `ahead = 2` → felt lag 0. **`ahead` and felt lag always sum
-to the latency** — `ahead` is literally "how many ticks of lag I've cancelled."
-
-**Current state:** walker3 leads; walker2 is glued 2 ticks behind it (immovable = the
-latency); walker1 should sprint up to walker3 but can't (its speed equals walker2's, and the
-`instant_step` sprint is gated off) and the constraint gate keeps prediction sparse — so
-walker1 mostly sits on walker2 (`ahead ≈ 0`), giving a felt lag of nearly the full 2 ticks.
-The goal of compensation is to move walker1 off walker2 and hold it on walker3; the
-walker2↔walker3 gap itself never closes — prediction relocates *what's on screen*, it does not
-make the truth arrive sooner.
-
-### Timeline: where the client is vs the server (200ms latency)
-
-```mermaid
-sequenceDiagram
-    participant S as Server (real-time truth)
-    participant N as Network (+200ms)
-    participant C as Client (render)
-
-    Note over S: t=0ms · server at step 20
-    S->>N: emit move 20
-    Note over S: t=100ms · server at step 21
-    S->>N: emit move 21
-    Note over S: t=200ms · server at step 22
-    S->>N: emit move 22
-    N->>C: move 20 arrives (server now at 22)
-    Note over C: received M=20
-    Note over C: ahead 0 → render step 20<br/>= 2 ticks behind the server's now ❌
-    Note over C: ahead +2 → predict 21,22 & render 22<br/>= level with the server's now ✅
-```
-
-### Why `ahead` can't be held at +2 (mechanism recap)
-
-- Snake animation speed = **10 cells/s → 100ms per step**, so the engine **drains ≈ 1 step
-  per 100ms = the move arrival rate**. Equal rates ⇒ the gap never widens (two walkers at the
-  same speed keep a constant distance). The only way to open a gap is `instant_step`
-  (teleport), gated behind `backlog > MAX_LAG(=3)`, which never trips (queue ≤ 2).
-- Predictions also refill only when the buffer empties ("drain-to-empty then refill"), so each
-  burst nets at most a transient +1 before the next confirmed move pulls it back.
-- A momentary "2 steps between two log rows" is **sampling jitter** (the per-move log straddles
-  an almost-finished animation), not the engine exceeding 1 step/100ms — averaged out,
-  `step = M − 1` throughout a run.
-
-Net: holding a standing `+2` needs an initial *sprint* to build the lead (instant-step) plus a
-*standing buffer* that tops up every tick — and under the mandatory constraint gate, where
-prediction is sparse, a sustained +2 is essentially unreachable by design (an accepted
-trade-off, not a bug).
+> The document uses the current metric **`ahead = step − M`** (resting value **−1**: the
+> render is one step behind the latest confirmed move due to the 100 ms animation). The
+> earlier `step − (M−1)` form (resting value `0`) is superseded and removed.

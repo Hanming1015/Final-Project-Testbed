@@ -38,6 +38,14 @@ export class SnakePredictor {
         return !!this.session && this.window.length >= N && this.rttMs >= LATENCY_THRESHOLD_MS;
     }
 
+    // Readiness ignoring latency: model loaded and window full. Used by the
+    // clock-driven (route-B) path, where the trigger is an overdue/late move
+    // rather than a measured RTT threshold, so a spike is masked even when the
+    // baseline RTT sits below LATENCY_THRESHOLD_MS.
+    canPredictByHistory() {
+        return !!this.session && this.window.length >= N;
+    }
+
     // Run inference. Returns the predicted direction (0-3) for t+1, or null if not ready.
     async predict() {
         if (!this.session || this.window.length < N) return null;

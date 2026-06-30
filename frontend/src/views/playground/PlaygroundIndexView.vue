@@ -1,14 +1,20 @@
 <template>
     <div class="dashboard">
+        <aside class="sidebar sidebar-left">
+            <PredictionStats :stats="predStats" />
+        </aside>
         <div class="game-area">
             <PlayGround v-if="$store.state.playground.status === 'playing'" />
             <MatchGround v-else />
             <ResultBoard v-if="$store.state.playground.loser !== 'none'" />
         </div>
-        <aside class="sidebar">
-            <LatencyDisplay  :rtt="rttMs" :injected="injectedMs" />
-            <LatencyInjector v-model="injectedMs" />
-            <PredictionLog   :entries="logEntries" />
+        <aside class="sidebar sidebar-right">
+            <!-- LatencyDisplay / LatencyInjector temporarily hidden (spike-only testing) -->
+            <LatencyDisplay  v-if="false" :rtt="rttMs" :injected="injectedMs" />
+            <LatencyInjector v-if="false" v-model="injectedMs" />
+            <SpikeInjector   @fire="fireSpike" />
+            <ModelToggle     v-model="predictionEnabled" />
+            <PredictionTrace :entries="traceEntries" />
             <SyncMonitor     :entries="syncEntries" />
         </aside>
     </div>
@@ -20,17 +26,48 @@ import MatchGround    from '@/components/MatchGround.vue';
 import ResultBoard    from '@/components/ResultBoard.vue';
 import LatencyDisplay  from '@/components/LatencyDisplay.vue';
 import LatencyInjector from '@/components/LatencyInjector.vue';
-import PredictionLog   from '@/components/PredictionLog.vue';
+import SpikeInjector   from '@/components/SpikeInjector.vue';
+import ModelToggle     from '@/components/ModelToggle.vue';
+import PredictionTrace from '@/components/PredictionTrace.vue';
+import PredictionStats from '@/components/PredictionStats.vue';
 import SyncMonitor     from '@/components/SyncMonitor.vue';
 import { SnakePredictor } from '@/assets/scripts/SnakePredictor';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 
-const MAX_LOG = 30;
 const MAX_SYNC = 100;
-const PREDICTION_ENABLED = true;
 const LOOKAHEAD = 2; // K: predict this many steps ahead (RTT 200ms / tick 100ms)
-let _predId = 0;     // monotonic ID for log entries
+const TICK_MS = 100; // server tick interval (moves arrive ~this often)
+// A confirmed move counts as "overdue" only once this long has passed since the
+// last one. Set above one tick so normal phase slack between the (independent)
+// ~100ms animation clock and ~100ms server clock is NOT mistaken for latency —
+// only a genuine gap (spike) crosses it. This is what keeps zero latency silent.
+const OVERDUE_MS = TICK_MS * 1.5;
+const DEBUG_PRED = true;            // console-log prediction glides / verifications
+const DIRC = ['↑', '→', '↓', '←']; // direction index → arrow (for logs)
+const MAX_TRACE = 40;               // rows kept in the Prediction Trace panel
+let _traceId = 0;    // monotonic ID for trace entries
+
+// Fresh cumulative counters for the Prediction Stats panel.
+const blankStats = () => ({
+    glides: 0,     // PREDICT events (times prediction kicked in)
+    verified: 0,   // predicted steps the server later confirmed
+    correct: 0,    // steps where both snakes were right
+    rollback: 0,   // steps where ≥1 snake was wrong
+    onScreen: 0,   // steps rendered before confirmation (glided)
+    masked: 0,     // correct & on-screen → latency hidden
+    visibleRb: 0,  // rollback & on-screen → visible correction
+    expired: 0,    // predicted steps dropped by an earlier rollback
+    aOk: 0,        // snake A direction-correct count (denominator = verified)
+    bOk: 0         // snake B direction-correct count
+});
+
+// ── Inference timing (measurement only — no behavioural effect) ──────────────
+// Records how long the sequential A+B ONNX inference takes, to check whether it
+// fits inside one ~100ms animation step (feasibility gate for clock-driven
+// prediction). Logs a rolling summary every _infN runs.
+const _infStats = { n: 0, sum: 0, max: 0, sumA: 0, sumB: 0 };
+const _infReport = 20;
 
 const DR = [-1, 0, 1, 0];
 const DC = [0, 1, 0, -1];
@@ -72,7 +109,8 @@ export default {
     name: 'PlaygroundIndexView',
     components: {
         PlayGround, MatchGround, ResultBoard,
-        LatencyDisplay, LatencyInjector, PredictionLog, SyncMonitor
+        LatencyDisplay, LatencyInjector, SpikeInjector, ModelToggle,
+        PredictionTrace, PredictionStats, SyncMonitor
     },
     setup() {
         const store = useStore();
@@ -90,6 +128,7 @@ export default {
         let predEpoch = 0;     // bumped every move; invalidates stale predict().then
         let gameEnded = false; // true once a result arrives
         let inferring = false; // true while an ONNX run is in flight (prevents re-entry)
+        let lastMoveAt = 0;    // performance.now() of the last delivered move (overdue clock)
 
         // Confirmed (server-authoritative) shadow of each snake, evolved purely
         // from the move stream so features/predictions never read mid-animation
@@ -99,8 +138,38 @@ export default {
 
         const rttMs      = ref(0);
         const injectedMs = ref(0);
-        const logEntries = ref([]);
         const syncEntries = ref([]);
+        const traceEntries = ref([]);        // Prediction Trace panel (PREDICT / VERIFY events)
+        const predStats = ref(blankStats()); // Prediction Stats panel (cumulative counters)
+        const predictionEnabled = ref(true); // false = silent model (render delayed moves only)
+
+        // ── Latency injection (ordered delivery) ─────────────────────────────
+        // Each incoming event is delivered after baseline injectedMs plus any
+        // active transient spike, clamped so event M+1 never overtakes M.
+        // Bunching is allowed, so a finished spike flushes and the stream
+        // catches back up (the spike "ends" cleanly).
+        let lastDeliverAt  = 0;   // performance.now() of the previous delivery
+        let spikeRemaining = 0;   // moves still affected by the active spike
+        let spikeMs        = 0;   // extra delay applied to each affected move
+
+        const scheduleDelivery = handler => {
+            const now = performance.now();
+            let extra = 0;
+            if (spikeRemaining > 0) { extra = spikeMs; spikeRemaining--; }
+            const target    = now + injectedMs.value + extra;
+            const deliverAt = Math.max(target, lastDeliverAt + 1); // strict order, allows bunching
+            lastDeliverAt   = deliverAt;
+            setTimeout(handler, Math.max(0, deliverAt - now));
+        };
+
+        // Arm a transient spike: the next `ticks` moves get `ms` extra delay.
+        // Reset the delivery floor to real-time so each spike is independent and
+        // fires immediately, regardless of any residual delay from a prior spike.
+        const fireSpike = ({ ms, ticks }) => {
+            spikeMs        = ms;
+            spikeRemaining = ticks;
+            lastDeliverAt  = performance.now();
+        };
 
         const initShadow = snake => ({
             body: snake.cells.map(c => ({ r: c.r, c: c.c })),
@@ -116,13 +185,166 @@ export default {
             sh.dir = dir;
         };
 
-        function pushLog(player, stepLabel, predicted) {
-            const e = { id: ++_predId, time: timestamp(), player,
-                        step: stepLabel, predicted, status: 'pending', actual: null };
-            logEntries.value.push(e);
-            if (logEntries.value.length > MAX_LOG) logEntries.value.shift();
-            return e;
+        // Append a row to the Prediction Trace panel (the in-UI mirror of the
+        // [PREDICT] / [VERIFY] console output).
+        function pushTrace(e) {
+            e.id = ++_traceId;
+            e.time = timestamp();
+            traceEntries.value.push(e);
+            if (traceEntries.value.length > MAX_TRACE) traceEntries.value.shift();
         }
+
+        // ── Clock-driven prediction (route-B) ────────────────────────────────
+        // Run every animation frame, but fire only when the next confirmed move is
+        // OVERDUE: both snakes idle, queues empty, and rendered exactly at the
+        // confirmed frontier (step === moveCount). That "a move is late" signal —
+        // not a measured RTT — is the trigger, so prediction stays silent at zero
+        // latency (nothing to hide) yet still masks a spike even when the baseline
+        // RTT is low. Anchored only at the confirmed shadow (never autoregressive),
+        // so a glide is capped at LOOKAHEAD steps; beyond that the snake freezes
+        // until the real moves arrive (gate closed → wait).
+        const tryPredict = () => {
+            if (!predictionEnabled.value || inferring || pending.length !== 0) return;
+            if (gameEnded || shadowA === null || shadowB === null || confApple === null) return;
+
+            const game = store.state.playground.gameObject;
+            if (!game) return;
+            const [snake0, snake1] = game.snakes;
+
+            // Overdue detector: rendered everything confirmed and nothing real is
+            // queued → caught up to the confirmed frontier with no next move.
+            if (snake0.status !== 'idle' || snake1.status !== 'idle') return;
+            if (snake0.direction_queue.length !== 0 || snake1.direction_queue.length !== 0) return;
+            if (snake0.step !== moveCount || snake1.step !== moveCount) return;
+
+            // ...but only treat it as a real late move once the gap exceeds normal
+            // phase slack. Below this, the next move is just about to arrive (the
+            // two ~100ms clocks are merely out of phase) — predicting there is the
+            // zero-latency noise we want to avoid.
+            if (performance.now() - lastMoveAt < OVERDUE_MS) return;
+
+            if (!predictorA.canPredictByHistory() || !predictorB.canPredictByHistory()) return;
+
+            const rows = game.rows, cols = game.cols;
+            const gmap = store.state.playground.gamemap;
+
+            // Gate: only spend predictions where the model is most accurate (both
+            // heads constrained at the confirmed frontier).
+            const occupied = new Set();
+            for (const c of shadowA.body) occupied.add(c.r * cols + c.c);
+            for (const c of shadowB.body) occupied.add(c.r * cols + c.c);
+            const headA = shadowA.body[0], headB = shadowB.body[0];
+            const consA = isConstrained(headA.r, headA.c, shadowA.dir, occupied, gmap, rows, cols);
+            const consB = isConstrained(headB.r, headB.c, shadowB.dir, occupied, gmap, rows, cols);
+            if (!(consA && consB)) return;
+
+            const myEpoch = predEpoch;
+
+            inferring = true;
+            (async () => {
+                // Run the two models sequentially: the wasm backend cannot run
+                // overlapping inferences on a session.
+                let pa, pb;
+                try {
+                    const _t0 = performance.now();
+                    pa = await predictorA.predict();
+                    const _t1 = performance.now();
+                    pb = await predictorB.predict();
+                    const _t2 = performance.now();
+
+                    // measurement only — accumulate + periodic report (Step 5 removes)
+                    const dA = _t1 - _t0, dB = _t2 - _t1, dTot = _t2 - _t0;
+                    _infStats.n++; _infStats.sum += dTot; _infStats.sumA += dA;
+                    _infStats.sumB += dB;
+                    if (dTot > _infStats.max) _infStats.max = dTot;
+                    if (_infStats.n % _infReport === 0) {
+                        const s = _infStats;
+                        console.log(
+                            `[InferTiming] n=${s.n} ` +
+                            `avgTotal=${(s.sum / s.n).toFixed(1)}ms ` +
+                            `(A=${(s.sumA / s.n).toFixed(1)} B=${(s.sumB / s.n).toFixed(1)}) ` +
+                            `max=${s.max.toFixed(1)}ms budget=100ms`
+                        );
+                    }
+                } finally {
+                    inferring = false;
+                }
+
+                // A real move arriving during inference bumps predEpoch — bail so
+                // we never enqueue a prediction onto a frontier that has moved.
+                if (myEpoch !== predEpoch || gameEnded) return;
+                if (pa === null || pb === null) return;
+                if (pending.length !== 0) return;
+                if (snake0.status !== 'idle' || snake1.status !== 'idle') return;
+                if (snake0.direction_queue.length !== 0 || snake1.direction_queue.length !== 0) return;
+                if (snake0.step !== moveCount || snake1.step !== moveCount) return;
+
+                // Simulate the lookahead from the confirmed shadow so the result is
+                // independent of live (mid-animation) cells. Occupancy = both
+                // confirmed bodies minus tail tips (which vacate as snakes move).
+                const occ = new Set();
+                for (let i = 0; i < shadowA.body.length - 1; i++)
+                    occ.add(shadowA.body[i].r * cols + shadowA.body[i].c);
+                for (let i = 0; i < shadowB.body.length - 1; i++)
+                    occ.add(shadowB.body[i].r * cols + shadowB.body[i].c);
+
+                let hrA = headA.r, hcA = headA.c, pdA = shadowA.dir;
+                let hrB = headB.r, hcB = headB.c, pdB = shadowB.dir;
+                let aR = confApple.r, aC = confApple.c;
+                const baseStep = moveCount;
+                const gA = [], gB = [];   // enqueued dirs, for the console log
+
+                for (let k = 0; k < LOOKAHEAD; k++) {
+                    const dA = pa[k], dB = pb[k];
+                    if (!isSafeStep(dA, pdA, hrA, hcA, occ, gmap, rows, cols)) break;
+                    if (!isSafeStep(dB, pdB, hrB, hcB, occ, gmap, rows, cols)) break;
+
+                    const nrA = hrA + DR[dA], ncA = hcA + DC[dA];
+                    const nrB = hrB + DR[dB], ncB = hcB + DC[dB];
+                    if (nrA === nrB && ncA === ncB) break; // head-on collision
+
+                    const eatA = (nrA === aR && ncA === aC);
+                    const eatB = (nrB === aR && ncB === aC);
+                    if (eatA || eatB) { aR = -1; aC = -1; } // respawn unknown
+
+                    snake0.enqueue_direction(dA, eatA);
+                    snake1.enqueue_direction(dB, eatB);
+
+                    pending.push({ step: baseStep + k + 1, dirA: dA, dirB: dB, eatA, eatB });
+                    gA.push(DIRC[dA]); gB.push(DIRC[dB]);
+
+                    occ.add(nrA * cols + ncA);
+                    occ.add(nrB * cols + ncB);
+                    hrA = nrA; hcA = ncA; pdA = dA;
+                    hrB = nrB; hcB = ncB; pdB = dB;
+                }
+
+                if (gA.length) {
+                    predStats.value.glides++;
+                    pushTrace({ type: 'predict', frontier: baseStep, count: gA.length, a: gA, b: gB });
+                    if (DEBUG_PRED) {
+                        console.log(
+                            `%c[PREDICT] move overdue @frontier ${baseStep} → glide ${gA.length} step(s):` +
+                            `  A=[${gA.join(' ')}]  B=[${gB.join(' ')}]`,
+                            'color:#4f46e5;font-weight:bold'
+                        );
+                    }
+                }
+            })();
+        };
+
+        let clockHandle = null;
+        const clockTick = () => {
+            // Set the engine's catch-up budget every frame from the live state:
+            // while a real predicted lead is animating (pending > 0) keep maxLag
+            // high so it animates smoothly; otherwise drop it so any confirmed
+            // backlog (e.g. the bunched moves a finished spike flushes) snaps and
+            // the snake stays tight to the confirmed frontier — no permanent lag.
+            const game = store.state.playground.gameObject;
+            if (game) game.maxLag = (predictionEnabled.value && pending.length > 0) ? 3 : 1;
+            tryPredict();
+            clockHandle = requestAnimationFrame(clockTick);
+        };
 
         onMounted(() => {
             store.commit("updateOpponent", { username: "Opponent" });
@@ -166,8 +388,10 @@ export default {
                     gameEnded = false;
                     inferring = false;
                     shadowA = null; shadowB = null; confApple = null;
-                    logEntries.value = [];
+                    lastDeliverAt = 0; spikeRemaining = 0; lastMoveAt = 0;
                     syncEntries.value = [];
+                    traceEntries.value = [];
+                    predStats.value = blankStats();
                     predictorA.reset();
                     predictorB.reset();
 
@@ -176,13 +400,14 @@ export default {
                     store.commit("updateGamemap", data.game);
 
                 } else if (data.event === "move") {
-                    setTimeout(() => {
+                    scheduleDelivery(() => {
                         const game = store.state.playground.gameObject;
                         if (!game || gameEnded) return;
                         const [snake0, snake1] = game.snakes;
-                        const rows = game.rows, cols = game.cols;
+                        const cols = game.cols;
                         const gmap = store.state.playground.gamemap;
 
+                        lastMoveAt = performance.now(); // reset the overdue clock
                         predEpoch++;                 // any in-flight predict is now stale
                         moveCount++;
                         const M = moveCount;
@@ -194,8 +419,12 @@ export default {
                             q:     snake0.direction_queue.length,
                             fps,
                             rtt:   rttMs.value.toFixed(0),
-                            pred:  predictorA.canPredict(),
-                            ahead: snake0.step - (M - 1)
+                            pred:  predictorA.canPredictByHistory(),
+                            // step relative to the latest confirmed move M.
+                            // -1 = normal (render lags one step behind M due to the
+                            // 100ms animation); 0 = caught up to M; +k = k predicted
+                            // steps rendered ahead of M.
+                            ahead: snake0.step - M
                         });
                         if (syncEntries.value.length > MAX_SYNC) syncEntries.value.shift();
 
@@ -208,8 +437,35 @@ export default {
                             const p = pending.shift();
                             const okA = data.a_direction === p.dirA && data.a_ate_apple === p.eatA;
                             const okB = data.b_direction === p.dirB && data.b_ate_apple === p.eatB;
-                            p.logA.status = okA ? 'correct' : 'rollback'; p.logA.actual = data.a_direction;
-                            p.logB.status = okB ? 'correct' : 'rollback'; p.logB.actual = data.b_direction;
+                            // Did the snake actually render this predicted step before
+                            // the server confirmed it? If so the prediction was on
+                            // screen — latency was masked (correct) or the wrong guess
+                            // was shown and is now rolled back (visible correction).
+                            const glided = snake0.step >= M;
+
+                            // ── Accumulate Prediction Stats ────────────────────
+                            const st = predStats.value;
+                            st.verified++;
+                            if (okA) st.aOk++;
+                            if (okB) st.bOk++;
+                            if (glided) st.onScreen++;
+                            if (okA && okB) { st.correct++; if (glided) st.masked++; }
+                            else            { st.rollback++; if (glided) st.visibleRb++; }
+
+                            pushTrace({ type: 'verify', step: M, ok: okA && okB, glided,
+                                aPred: DIRC[p.dirA], aSrv: DIRC[data.a_direction],
+                                bPred: DIRC[p.dirB], bSrv: DIRC[data.b_direction] });
+                            if (DEBUG_PRED) {
+                                const tag = (okA && okB) ? '%c✓ correct' : '%c✗ ROLLBACK';
+                                const col = (okA && okB) ? 'color:#16a34a' : 'color:#dc2626;font-weight:bold';
+                                console.log(
+                                    `[VERIFY] step ${M} ${tag}` +
+                                    `  A pred ${DIRC[p.dirA]}/srv ${DIRC[data.a_direction]}` +
+                                    `  B pred ${DIRC[p.dirB]}/srv ${DIRC[data.b_direction]}` +
+                                    `  ${glided ? 'GLIDED (on screen)' : 'still queued (not shown)'}`,
+                                    col
+                                );
+                            }
 
                             if (okA && okB) {
                                 suppressed = true;   // engine already advanced step M correctly
@@ -222,10 +478,7 @@ export default {
                                     snake0.direction_queue = [];
                                     snake1.direction_queue = [];
                                 }
-                                for (const q of pending) {
-                                    if (q.logA.status === 'pending') q.logA.status = 'expired';
-                                    if (q.logB.status === 'pending') q.logB.status = 'expired';
-                                }
+                                st.expired += pending.length; // queued predictions now dropped
                                 pending = [];
                             }
                         }
@@ -253,81 +506,11 @@ export default {
                         predictorB.addFrame(data.b_direction, headB.r, headB.c, occupied, gmap,
                                             game.apple.r, game.apple.c, data.b_ate_apple);
 
-                        // ── Refill the lookahead window when fully drained ──────
-                        // Gate on at least one snake being in a constrained position
-                        // (switch to consA && consB for the high-confidence-only regime).
-                        const consA = isConstrained(headA.r, headA.c, shadowA.dir, occupied, gmap, rows, cols);
-                        const consB = isConstrained(headB.r, headB.c, shadowB.dir, occupied, gmap, rows, cols);
-
-                        if (PREDICTION_ENABLED && (consA && consB) && !inferring && pending.length === 0 &&
-                            predictorA.canPredict() && predictorB.canPredict()) {
-
-                            const myEpoch = predEpoch;
-                            const baseStep = M;
-                            const baseA = { headR: shadowA.body[0].r, headC: shadowA.body[0].c, dir: shadowA.dir };
-                            const baseB = { headR: shadowB.body[0].r, headC: shadowB.body[0].c, dir: shadowB.dir };
-                            const baseApple = confApple;
-
-                            inferring = true;
-                            (async () => {
-                                // Run the two models sequentially: the wasm backend cannot
-                                // run overlapping inferences on a session.
-                                let pa, pb;
-                                try {
-                                    pa = await predictorA.predict();
-                                    pb = await predictorB.predict();
-                                } finally {
-                                    inferring = false;
-                                }
-
-                                if (myEpoch !== predEpoch || gameEnded) return; // stale / ended
-                                if (pa === null || pb === null) return;
-                                if (pending.length !== 0) return;               // already refilled
-
-                                // Simulate the lookahead from the confirmed shadow so the
-                                // result is independent of live (mid-animation) cell state.
-                                // Collision occupancy = both confirmed bodies minus their
-                                // tail tips (which vacate as the snake moves), growing as we
-                                // accept each predicted head.
-                                const occ = new Set();
-                                for (let i = 0; i < shadowA.body.length - 1; i++)
-                                    occ.add(shadowA.body[i].r * cols + shadowA.body[i].c);
-                                for (let i = 0; i < shadowB.body.length - 1; i++)
-                                    occ.add(shadowB.body[i].r * cols + shadowB.body[i].c);
-
-                                let hrA = baseA.headR, hcA = baseA.headC, pdA = baseA.dir;
-                                let hrB = baseB.headR, hcB = baseB.headC, pdB = baseB.dir;
-                                let aR = baseApple.r, aC = baseApple.c;
-
-                                for (let k = 0; k < LOOKAHEAD; k++) {
-                                    const dA = pa[k], dB = pb[k];
-                                    if (!isSafeStep(dA, pdA, hrA, hcA, occ, gmap, rows, cols)) break;
-                                    if (!isSafeStep(dB, pdB, hrB, hcB, occ, gmap, rows, cols)) break;
-
-                                    const nrA = hrA + DR[dA], ncA = hcA + DC[dA];
-                                    const nrB = hrB + DR[dB], ncB = hcB + DC[dB];
-                                    if (nrA === nrB && ncA === ncB) break; // head-on collision
-
-                                    const eatA = (nrA === aR && ncA === aC);
-                                    const eatB = (nrB === aR && ncB === aC);
-                                    if (eatA || eatB) { aR = -1; aC = -1; } // respawn unknown
-
-                                    snake0.enqueue_direction(dA, eatA);
-                                    snake1.enqueue_direction(dB, eatB);
-
-                                    const logA = pushLog('A', `t+${k + 1}`, dA);
-                                    const logB = pushLog('B', `t+${k + 1}`, dB);
-                                    pending.push({ step: baseStep + k + 1,
-                                        dirA: dA, dirB: dB, eatA, eatB, logA, logB });
-
-                                    occ.add(nrA * cols + ncA);
-                                    occ.add(nrB * cols + ncB);
-                                    hrA = nrA; hcA = ncA; pdA = dA;
-                                    hrB = nrB; hcB = ncB; pdB = dB;
-                                }
-                            })();
-                        }
-                    }, injectedMs.value);
+                        // Prediction is no longer triggered here. The clock-driven
+                        // refill (tryPredict, started in onMounted) owns it now: it
+                        // fires whenever the next confirmed move is overdue, so the
+                        // trigger is move-lateness rather than a measured RTT.
+                    });
 
                 } else if (data.event === "result") {
                     // Stop further advancement immediately so the engine cannot drain
@@ -340,7 +523,7 @@ export default {
                         g.snakes[1].direction_queue = [];
                     }
 
-                    setTimeout(() => {
+                    scheduleDelivery(() => {
                         const game = store.state.playground.gameObject;
                         if (!game) return;
                         const [snake0, snake1] = game.snakes;
@@ -358,7 +541,7 @@ export default {
                             store.commit("updateLoser", data.loser);
                         };
                         requestAnimationFrame(applyResult);
-                    }, injectedMs.value);
+                    });
                 }
             };
 
@@ -366,14 +549,19 @@ export default {
                 console.log("WebSocket connection closed.");
                 store.commit("updateStatus", "matching");
             };
+
+            // Start the prediction clock (route-B). Cheap no-op while not playing
+            // or when the gap detector / gate is closed.
+            clockHandle = requestAnimationFrame(clockTick);
         });
 
         onUnmounted(() => {
             if (pingInterval) clearInterval(pingInterval);
+            if (clockHandle) cancelAnimationFrame(clockHandle);
             if (socket) socket.close();
         });
 
-        return { rttMs, injectedMs, logEntries, syncEntries };
+        return { rttMs, injectedMs, predictionEnabled, syncEntries, traceEntries, predStats, fireSpike };
     }
 }
 </script>
@@ -401,6 +589,7 @@ export default {
     box-shadow: var(--tb-shadow);
     overflow: hidden;
 }
+/* Symmetric left/right columns flanking the centred game area. */
 .sidebar {
     flex: 0 0 360px;
     display: flex;
