@@ -1,49 +1,56 @@
 # Edge-AI Latency Compensation Testbed
 
-A research testbed for studying and mitigating the effects of network latency in real-time multiplayer web applications, using a two-player snake game as the experimental platform.
+A research testbed for studying and mitigating the effects of network latency in real-time multiplayer web applications, using a two-player snake game as the experimental platform. A **GRU Seq2Seq** model is trained on bot self-play, exported to **ONNX**, and run **in the browser** to predict player trajectories and mask perceived latency.
 
 ## Research Background
 
 In highly interactive web systems (e.g. real-time multiplayer games, high-frequency collaboration tools), network latency causes severe visual jitter and frequent server-side state rollbacks, significantly degrading user experience. The traditional approach — **Dead Reckoning** — predicts future positions from object inertia and works well for simple linear motion, but fails under complex, non-linear game logic or sudden state changes.
 
-This project investigates a **Sequence-to-Sequence (Seq2Seq) Machine Learning** architecture deployed as a context-aware, lightweight Edge-AI model running directly in the user's browser (Edge Computing), to predict player trajectories and mask perceived network latency without transmitting sensitive data to the server.
+This project investigates a **Sequence-to-Sequence (Seq2Seq) Machine Learning** architecture deployed as a context-aware, lightweight Edge-AI model running directly in the user's browser (Edge Computing), to predict player trajectories and mask perceived network latency without transmitting sensitive data to the server. The central research question:
+
+> **Can a learned sequence model (GRU Seq2Seq) mask client-side latency better than hand-written rule-based dead-reckoning, and how does that advantage depend on the latency spike?**
 
 ## Research Objectives
 
-1. **Testbed Implementation** — Build a real-time two-player snake environment (13×14 grid, obstacles, apple rewards) as a data generator and visual demonstration platform.
-2. **Context-Aware Hybrid Trigger Mechanism** — Design a heuristic trigger based on spatial constraints (e.g. proximity to apples or obstacles) to invoke the AI model on-demand.
-3. **Seq2Seq Lightweight Model** — Train a GRU/LSTM model optimised for time-series trajectory prediction, export to ONNX format for in-browser deployment via WebAssembly.
-4. **Benchmarking & Evaluation** — Compare the proposed architecture against baseline Dead Reckoning across three metrics: Spatial Accuracy (MAE), Visual Smoothness (rollback frequency & magnitude), and Computational Efficiency (client-side ONNX inference latency).
+1. **Testbed Implementation** — Build a real-time two-player snake environment (25×28 grid, 40 obstacles, apple rewards) as a data generator and visual demonstration platform. ✅
+2. **Context-Aware Trigger Mechanism** — A **clock-driven** trigger ("route-B"): the client predicts only when a confirmed server move is **overdue**, and only through a **constraint gate** (fires when both snakes are boxed in, where prediction is both useful and reliable). ✅
+3. **Seq2Seq Lightweight Model** — Train a GRU model on egocentric trajectory features, exported to ONNX for in-browser deployment via `onnxruntime-web` (WebAssembly). Single-pass, dual-head output of **K = 2** future steps for **both** snakes. ✅
+4. **Benchmarking & Evaluation** — Compare three predictor modes (`off` / `rule` / `model`) across a latency-spike sweep, on **felt-lag reduction** (headline), **prediction accuracy** (by horizon / snake), **masked vs visible-rollback rate**, **coverage**, and **inference time**. ✅ instrumented; data collection in progress.
+
+See [`docs/evaluation-plan.md`](docs/evaluation-plan.md) for the full evaluation design and [`analysis/`](analysis/) for the offline analysis pipeline.
 
 ## Architecture
 
-The testbed adopts a **strictly decoupled client-server architecture**:
+The testbed adopts a **strictly decoupled, server-authoritative client-server architecture** — this separation is what *creates* the latency gap the system compensates.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     Browser (Client)                     │
-│                                                         │
-│  Vue.js UI  ──►  Game Rendering (Canvas)                │
-│                       │                                 │
-│              [ONNX Runtime / Edge-AI Model]             │
-│                       │                                 │
-│           WebSocket Client (JWT Auth)                   │
-└───────────────────────┼─────────────────────────────────┘
+│                                                          │
+│  Vue 3 UI  ──►  Game Rendering (queue engine + history)  │
+│                       │                                  │
+│         [ONNX Runtime Web — GRU predictor A / B]         │
+│           predict up to K=2 steps, verify, rollback      │
+│                       │                                  │
+│           WebSocket Client (JWT Auth) + ping-pong        │
+└───────────────────────┼──────────────────────────────────┘
                         │  WebSocket  (ws://host:3000)
-┌───────────────────────┼─────────────────────────────────┐
+┌───────────────────────┼──────────────────────────────────┐
 │              Spring Boot Backend (Java)                  │
-│                                                         │
-│   WebSocket Server  ──►  Matchmaking Pool               │
-│                       │                                 │
-│                  Game Thread (Authoritative State)      │
-│                       │                                 │
-│          Spring Security + JWT  ──►  MySQL              │
-└─────────────────────────────────────────────────────────┘
+│                                                          │
+│   WebSocket Server  ──►  Matchmaking / Bot Games         │
+│                       │                                  │
+│              Game Thread (100 ms authoritative tick)     │
+│                       │                                  │
+│          Spring Security + JWT  ──►  MySQL               │
+└──────────────────────────────────────────────────────────┘
 ```
 
-- The **server** is the single authoritative game state manager; all collision detection and game logic run here.
-- The **client** renders state received from the server and will host the Edge-AI model to locally predict and smooth player positions between server updates.
-- Real-time communication is handled over **WebSocket**, enabling low-latency state synchronisation and allowing artificial network latency injection for experiments.
+- The **server** is the single authoritative game state manager; all collision detection and game logic run here on a 100 ms tick.
+- The **client** renders confirmed server state and runs the Edge-AI model to locally predict and smooth positions between server updates, verifying every prediction against the next real move and rolling back on mismatch.
+- Real-time communication is handled over **WebSocket**, enabling low-latency state synchronisation and allowing artificial latency **spike** injection for experiments.
+
+For the full prediction/reconciliation loop, the dashboard instrumentation, and the three-walker `felt-lag` model, see [`docs/architecture.md`](docs/architecture.md) and [`docs/walker-model.md`](docs/walker-model.md).
 
 ## Tech Stack
 
@@ -54,21 +61,21 @@ The testbed adopts a **strictly decoupled client-server architecture**:
 | ORM | MyBatis-Plus |
 | Database | MySQL |
 | Authentication | Spring Security + JWT (JJWT) |
-| Real-time Communication | Spring WebSocket (`@ServerEndpoint`) |
+| Real-time Communication | Spring WebSocket |
 | Frontend Framework | Vue.js 3 + Vue Router + Vuex |
 | UI | Bootstrap 5 + jQuery |
 | HTTP Client | Axios |
-| ML Training | PyTorch (GRU / LSTM) |
-| ML Inference (planned) | ONNX Runtime Web (WebAssembly) |
+| ML Training | PyTorch (GRU Seq2Seq) |
+| ML Inference | ONNX Runtime Web (`onnxruntime-web`, WebAssembly) |
+| Offline Analysis | Python (pandas / numpy / matplotlib) |
 
 ## Game Rules
 
-- The map is a **13 × 14 grid** with randomly placed obstacles.
-- Two players each control a snake, starting from opposite ends of the map.
-- Players move in real time by pressing direction keys.
-- A player **loses** if their snake collides with the boundary, an obstacle, or the other player's body.
-- The snake's length **grows automatically** over time (increasing collision risk).
-- **Apple** rewards are placed on the map; eating an apple reduces the snake's length.
+- The map is a **25 × 28 grid** with **40** randomly placed inner obstacles.
+- Two snakes start from opposite ends of the map and move once per 100 ms server tick.
+- A snake **loses** if it collides with the boundary, an obstacle, or the other snake's body.
+- The snake's length **grows automatically** over time (increasing collision risk); eating an **apple** reduces its length.
+- Modes: **Player vs Bot** and **Bot vs Bot** (spectate). Evaluation is run **bot-vs-bot** — both snakes are driven by the server-side bot, giving reproducible, fully-observable conditions.
 
 ## Project Structure
 
@@ -79,29 +86,37 @@ Final-Project-Testbed/
 │       ├── config/                 # CORS, Security, WebSocket config
 │       ├── consumer/
 │       │   ├── WebSocketServer.java   # WebSocket endpoint & matchmaking
-│       │   └── utils/
+│       │   └── game/
 │       │       ├── Game.java          # Game loop thread (authoritative state)
-│       │       ├── Player.java
-│       │       └── Cell.java
+│       │       ├── Player.java / Cell.java
+│       │       └── ...                # bot logic, map generation
 │       ├── controller/             # REST API controllers
 │       ├── service/                # Business logic (login, register, info)
 │       ├── mapper/                 # MyBatis-Plus mappers
 │       └── pojo/                   # Data models
 ├── frontend/                       # Vue.js application
+│   ├── public/models/model.onnx    # exported GRU model (loaded at runtime)
 │   └── src/
 │       ├── assets/scripts/
 │       │   ├── AcGameObject.js     # Base game object (game loop)
 │       │   ├── GameMap.js          # Canvas rendering & wall generation
-│       │   ├── Snake.js            # Client-side snake rendering
-│       │   └── Cell.js / Wall.js
+│       │   ├── Snake.js            # Client-side snake (queue engine + rollback)
+│       │   ├── SnakePredictor.js   # ONNX inference + egocentric features
+│       │   └── MetricsLog.js       # Structured evaluation logger (CSV/JSON)
 │       ├── components/
-│       │   ├── GameMap.vue
-│       │   ├── PlayGround.vue
-│       │   ├── MatchGround.vue
-│       │   └── ResultBoard.vue
-│       ├── views/                  # Page-level views
+│       │   ├── GameMap.vue / PlayGround.vue
+│       │   ├── MatchGround.vue / ResultBoard.vue
+│       │   ├── SpikeInjector.vue   # INPUT  — inject latency spike (+ auto-spike)
+│       │   ├── ModelToggle.vue     # INPUT  — cycle off / rule / model
+│       │   ├── MetricsExport.vue   # OUTPUT — export metrics (CSV / JSON)
+│       │   ├── PredictionStats.vue # OUTPUT — live accuracy / masked / rollback
+│       │   ├── PredictionTrace.vue # OUTPUT — per-event predict / verify log
+│       │   └── SyncMonitor.vue     # OUTPUT — client↔server sync (`ahead`)
+│       ├── views/playground/       # Playground page (prediction/reconciliation loop)
 │       ├── store/                  # Vuex state (user auth, playground)
 │       └── router/                 # Vue Router routes
+├── docs/                           # Design docs (architecture, walker model, eval plan)
+├── analysis/                       # Offline analysis (analyze.py + README)
 └── Project Plan.pdf
 ```
 
@@ -113,6 +128,7 @@ Final-Project-Testbed/
 - Maven 3.8+
 - Node.js 16+ & npm
 - MySQL 8.x
+- Python 3.10+ (offline analysis only)
 
 ### Backend Setup
 
@@ -141,44 +157,57 @@ npm run serve
 
 ### Access
 
-Open `http://localhost:8080` in your browser. Register an account and start a match — two browser tabs (or two users) can connect simultaneously to test the multiplayer flow.
+Open `http://localhost:8080` in your browser. Register an account, then start a **Bot vs Bot** match to watch the prediction layer compensate an injected latency spike, or **Player vs Bot** to play manually.
 
 ## WebSocket Protocol
 
 The WebSocket endpoint is `ws://localhost:3000/websocket/{jwt_token}`.
 
-| Direction | Event | Payload |
+| Direction | Event | Notes |
 |---|---|---|
-| Client → Server | `startMatching` / `stopMatching` | `{"event": "startMatching"}` |
-| Server → Client | `matchSuccess` | player info, map seed |
-| Client → Server | `move` | `{"event": "move", "direction": 0-3}` |
-| Server → Client | `move` | authoritative positions for both players |
-| Server → Client | `result` | `{"event": "result", "loser": 0/1}` |
+| Client → Server | `start-matching` / `stop-matching` | join / leave the human matchmaking pool |
+| Client → Server | `start-bot-game` | Player vs Bot |
+| Client → Server | `start-watch-game` | Bot vs Bot (spectate) — used for evaluation |
+| Client → Server | `move` | `{"event": "move", "direction": 0-3}` (human play) |
+| Client → Server | `ping` | latency probe (server replies `pong`) |
+| Server → Client | `matching-success` | opponent info + map seed |
+| Server → Client | `move` | authoritative directions + apple + ate flags for **both** snakes |
+| Server → Client | `result` | `{"event": "result", "loser": "A" \| "B" \| "all"}` |
+
+## Evaluation
+
+Three predictor modes are compared under a latency-**spike** sweep (magnitude `m` × duration `n` ticks):
+
+- **`off`** — no prediction (freeze + snap baseline).
+- **`rule`** — dead-reckoning: repeat the last confirmed direction (through the same gate / verify / rollback).
+- **`model`** — the GRU.
+
+| Tier | Metric | Definition |
+|---|---|---|
+| 1 — Accuracy | Direction accuracy, **by horizon** (t+1 / t+2) & by snake | predicted dir == server dir |
+| 1 — Accuracy | **Coverage** | fraction of overdue episodes where the constraint gate fired |
+| 2 — Effectiveness | **Felt-lag** (freeze-peak — headline) | `felt lag = latency − ahead`, measured at the worst instant of each freeze window |
+| 2 — Effectiveness | **Masked rate** / **Visible-rollback rate** | correct-&-on-screen (benefit) vs wrong-&-on-screen (cost) |
+| 3 — Feasibility | **Inference time** (mean / max vs 100 ms budget) | client-side ONNX latency |
+
+Metrics are logged raw in-browser (`MetricsLog.js` → `MetricsExport` panel → CSV/JSON) and aggregated **offline** (`analysis/analyze.py`, mean ± 95% CI across independent games). The headline figure plots freeze-peak felt-lag vs spike size with one curve per mode. See [`docs/evaluation-plan.md`](docs/evaluation-plan.md) and [`analysis/README.md`](analysis/README.md).
 
 ## Research Roadmap
 
 | Phase | Task | Status |
 |---|---|---|
-| 1 | Project Initiation & Literature Review | Done |
-| 2 | Testbed Implementation (game + WebSocket + auth) | Done |
-| 3 | Telemetry Data Collection (synthetic zero-latency traces) | Planned |
-| 4 | GRU Model Training & Tuning (PyTorch) | Planned |
-| 5 | ONNX Model Export & Web Integration | Planned |
-| 6 | Context-Aware Trigger Implementation | Planned |
-| 7 | Reconciliation & Conflict Logic | Planned |
-| 8 | System Benchmarking & Evaluation (MAE, rollback rate, inference latency) | Planned |
-| 9 | Dissertation Writing & Finalisation | Planned |
-
-## Evaluation Metrics
-
-| Metric | Description |
-|---|---|
-| **Spatial Accuracy (MAE)** | Mean Absolute Error between AI-predicted and ground-truth positions |
-| **Visual Smoothness** | Frequency and magnitude of catastrophic state rollbacks |
-| **Computational Efficiency** | Client-side ONNX runtime inference latency (ms) |
+| 1 | Project Initiation & Literature Review | ✅ Done |
+| 2 | Testbed Implementation (game + WebSocket + auth) | ✅ Done |
+| 3 | Telemetry Data Collection (bot self-play traces) | ✅ Done |
+| 4 | GRU Model Training & Tuning (PyTorch) | ✅ Done |
+| 5 | ONNX Model Export & Web Integration | ✅ Done |
+| 6 | Context-Aware Trigger (constraint gate + clock-driven route-B) | ✅ Done |
+| 7 | Reconciliation & Rollback Logic | ✅ Done |
+| 8 | System Benchmarking & Evaluation | 🔄 Instrumented; data collection in progress |
+| 9 | Dissertation Writing & Finalisation | 🔄 In progress |
 
 ## Ethical & Privacy Notes
 
-- All training data is **synthetically generated** from the testbed (coordinates, vectors, distances) — no human subjects or real user demographic data is involved.
+- All training and evaluation data is **synthetically generated** from bot self-play in the testbed (coordinates, vectors, distances) — no human subjects or real user demographic data is involved. Human-trace collection is acknowledged as future work.
 - All AI inference runs **locally in the browser**; no trajectory data is transmitted to the server, satisfying privacy-by-design principles and GDPR compliance.
 - The model relies solely on physical/spatial constraints, making it inherently free from demographic algorithmic bias.

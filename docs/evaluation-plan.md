@@ -40,8 +40,9 @@ states where the gate fires.
   simulation, verify and rollback as the model — only the direction source differs.
 - `model` = the GRU.
 
-**Run every spike condition under all three modes** (paired comparison) so the only
-difference is the predictor.
+**Run every spike condition under all three modes** (condition-matched across modes;
+independent games per condition — unpaired, aggregated with mean ± CI, see §4) so the only
+systematic difference is the predictor.
 
 ---
 
@@ -63,7 +64,7 @@ difference is the predictor.
 
 | Metric | Definition | Status |
 |---|---|---|
-| **Felt-lag** (mean, **p95**, distribution) | `felt lag = latency − ahead`; report per mode | ✅ ingredients logged (`ticks`: `ahead` + delivery time `t` + `spikeMs/spikeTicks`) — derive offline |
+| **Felt-lag — freeze-peak** (headline) | `felt lag = latency − ahead`, measured at the **worst instant of each freeze window** (delivery gap > 1.5× cadence), aggregated per mode. This is where `off` (freeze) and `model` (glide) separate; a whole-game mean **dilutes** the effect and is kept only as context. | ✅ reconstructed offline from `renders` (per-frame w1) + `ticks` cadence — see `analysis/analyze.py` `felt_lag_spikes()` |
 | **Masked rate** | predicted steps that were correct **and** on-screen → latency hidden | ✅ PredictionStats + `verifies` (`correct && onScreen`) |
 | **Visible-rollback rate** | predicted steps that were wrong **and** on-screen → visible correction (the **cost** side) | ✅ PredictionStats + `verifies` (`!correct && onScreen`) |
 | Freeze rate / duration *(optional)* | how often / how long the snake stalls (the `rule`/`off` failure mode) | ⬜ optional |
@@ -86,35 +87,51 @@ difference is the predictor.
 **Implemented** — `MetricsLog.js` records raw fields per event; the `MetricsExport`
 panel dumps CSV / JSON in the browser (do not read panels by eye). Every row is stamped
 with the experiment context (`game, mode, spikeMs, spikeTicks, sinceSpike, t`) so a
-single CSV can be **filtered per condition** offline. Four tables:
+single CSV can be **filtered per condition** offline. Five tables:
 
 - **`verifies`** (per confirmed prediction): `step, horizon(t+1/t+2), aPred, aSrv, bPred, bSrv, okA, okB, correct, onScreen`
-- **`ticks`** (per delivered move): `step, M, ahead` + delivery time `t` → `felt_lag = injected_latency − ahead` derived offline
+- **`ticks`** (per delivered move): `step, M, ahead` + delivery time `t` → anchors the server cadence
+- **`renders`** (per animation frame, throttled ~33 ms): `step, M` → the rendered walker w1(t). The **only** source that samples **during** a spike freeze, where no move is delivered — needed to reconstruct freeze-peak felt-lag (`off` freeze vs `model` glide)
 - **`overdues`** (per overdue episode): `gateOpen` → coverage
 - **`infers`** (per model inference): `ms` (feasibility; `rule`/`off` log none)
 
-> **One spike per game.** `sinceSpike` tracks moves since the **most recent** spike, so
-> the intended protocol is one spike setting per game (§4). Firing several different
-> spikes in one game overwrites the earlier `(m,n)` context — fine for the paired
-> protocol, but don't mix conditions within a game.
+> **One condition per game, not one spike.** With **auto-spike** on (§4), many spikes of
+> the **same** `(m,n)` fire within a game (each re-arms `sinceSpike`) — that is intended and
+> gives many freeze samples per game. What must stay constant within a game is the
+> **condition** (`mode`, `m`, `n`); don't change the mode or spike settings mid-game.
 
 ---
 
 ## 4. Aggregation & rigor
 
-1. **Repeat:** run **N games / N spikes per condition**; report **mean ± confidence
-   interval**, never a single game (one-game numbers are anecdotal).
-2. **Pair:** identical spike settings across `off` / `rule` / `model`.
-3. **Be honest about coverage:** felt-lag improvement only occurs on gate-open spikes —
-   either report felt-lag **on gate-open spikes**, or report over all spikes **with the
-   coverage stated**, so open-space spikes don't silently dilute the mean.
+1. **Repeat (unpaired):** each game is an **independent** bot-vs-bot match under **one**
+   condition (`mode × m × n`); run several games per condition and report **mean ± 95% CI**
+   across games / freeze-spikes, never a single game (one-game numbers are anecdotal). The
+   conditions are **matched across modes** (same `m, n` for `off` / `rule` / `model`), but the
+   games themselves are not paired — aggregation is across independent games.
+2. **Two collection sub-campaigns:**
+   - **Auto-spike ON** → measures the **masking magnitude** (freeze-peak felt-lag, accuracy,
+     masked/rollback). Auto-spike fires whenever both snakes are constrained, so it forces
+     gate-open freeze windows and yields many comparable samples fast. Fires identically in all
+     three modes, so `off` / `rule` / `model` face the same provocations.
+   - **Auto-spike OFF (free play)** → measures **natural coverage** (`overdues.gateOpen`): how
+     often the gate opens on its own. Auto-spike would bias this, so coverage must come from
+     free-play games.
+3. **Report two numbers, not one.** Effective benefit ≈ **masking magnitude × natural
+   coverage**: the model only masks when the gate opens, so a large freeze-peak reduction under
+   auto-spike must be reported **alongside** the natural coverage, or open-space spikes silently
+   dilute the story. Never quote felt-lag improvement without the coverage next to it.
+4. **Collection hygiene:** one condition per game (§3); **Reset** the metrics log between
+   conditions and export one JSON per condition, so files don't overlap. Drop all JSONs in one
+   folder — `analysis/analyze.py` tags every row with its condition and aggregates.
 
 ---
 
 ## 5. Headline figure
 
-> **x-axis** = spike size (`m`, or `m + n − 1`) · **y-axis** = **felt-lag** (or
-> masked-rate) · **three curves** = `off` / `rule` / `model`.
+> **x-axis** = spike size (`m`, or `m + n − 1`) · **y-axis** = **freeze-peak felt-lag**
+> (headline; or masked-rate) · **three curves** = `off` / `rule` / `model`.
+> Produced by `analysis/analyze.py` → `headline_feltlag.png`.
 
 One figure shows both results at once:
 
@@ -129,23 +146,29 @@ One figure shows both results at once:
 Instrumentation done:
 
 1. ✅ **t+1 / t+2 accuracy split** — each pending step tagged with `horizon`; logged in `verifies`.
-2. ✅ **Felt-lag logging** — `ticks` logs `ahead` + delivery time + spike params; felt-lag derived offline.
+2. ✅ **Felt-lag logging + freeze-peak reconstruction** — `ticks` anchors the server cadence,
+   `renders` samples the rendered walker per frame (incl. during the freeze); freeze-peak
+   felt-lag derived offline (`analyze.py` `felt_lag_spikes()`).
 3. ✅ **Coverage counter** — one `overdues` row per overdue episode with `gateOpen`.
 4. ✅ **`rule` predictor mode** — dead-reckoning at the single `tryPredict` seam
    (`pa = Array(LOOKAHEAD).fill(shadowA.dir)`) + tri-state `ModelToggle` (off/rule/model).
-5. ✅ **Structured export** — `MetricsLog.js` + `MetricsExport` panel (Verifies CSV / Ticks CSV / JSON).
+5. ✅ **Auto-spike** — `SpikeInjector` Auto mode fires when both snakes are constrained, to
+   collect gate-open freeze samples efficiently (same in all modes).
+6. ✅ **Structured export** — `MetricsLog.js` + `MetricsExport` panel (Verifies / Renders CSV, JSON).
+7. ✅ **Offline analysis pipeline** — `analysis/analyze.py`: per-condition accuracy, masking,
+   coverage, freeze-peak felt-lag (+ headline plot), inference timing (mean ± 95% CI).
 
 Remaining:
 
-- ⬜ **Multi-run aggregation** — done **offline** from the exported CSVs (mean ± CI, paired
-  across modes); no in-app aggregation planned.
+- 🔄 **Data collection** — run the `mode × m × n` sweep (several games per condition; auto-spike
+  ON for magnitude, OFF for natural coverage), export per condition, aggregate with `analyze.py`.
 - ⬜ **Model size** — record params / ONNX file size once (Tier 3).
 
 ---
 
 ## 7. One-line summary
 
-Vary **mode × m × n**; lead with **felt-lag** (+ visible-rollback as the cost),
-backed by **t+1/t+2 accuracy** and **coverage**, with **inference time** for
-feasibility; aggregate over many runs and plot **one "three modes vs spike size"
-curve**.
+Vary **mode × m × n**; lead with **freeze-peak felt-lag** (+ visible-rollback as the
+cost), backed by **t+1/t+2 accuracy** and **coverage** (reported as magnitude × coverage),
+with **inference time** for feasibility; aggregate over many independent games and plot
+**one "three modes vs spike size" curve**.

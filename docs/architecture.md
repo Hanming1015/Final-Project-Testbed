@@ -50,8 +50,8 @@ flowchart TB
 
         subgraph UI["Dashboard / Instrumentation"]
             GM["Game Render"]
-            CTRL["INPUTS:<br/>SpikeInjector · ModelToggle"]
-            OBS["OUTPUTS:<br/>PredictionStats · PredictionTrace · SyncMonitor"]
+            CTRL["INPUTS:<br/>SpikeInjector (+auto) · ModelToggle (off/rule/model)"]
+            OBS["OUTPUTS:<br/>PredictionStats · PredictionTrace · SyncMonitor · MetricsExport"]
         end
     end
 
@@ -101,29 +101,36 @@ confirmed move is **overdue** (clock-driven, "route-B" — not a measured RTT) t
 predicts up to **2 steps** ahead (K = horizon; tick 100ms) for **both** snakes, renders them
 immediately, and **verifies + rolls back** against real server moves. Training data comes
 from **bot self-play** in the same engine. A **dashboard** makes a latency **spike**,
-predictions, and sync **observable and controllable** for systematic experiments.
+predictions, and sync **observable and controllable** for systematic experiments, and the
+predictor runs in one of **three modes** — `off` (no prediction) / `rule` (dead-reckoning
+baseline) / `model` (GRU) — so the learned model can be benchmarked against a hand-written
+rule. Raw per-event metrics are logged and exported (CSV/JSON) for offline analysis; the
+evaluation design lives in [`evaluation-plan.md`](./evaluation-plan.md).
 
 ---
 
 ## 4. Dashboard Components (Instrumentation Layer)
 
 The panels turn invisible latency compensation into something **observable and
-controllable**. Two are **inputs (controls)**, three are **outputs (observability)**.
+controllable**. Two are **inputs (controls)**, the rest are **outputs (observability +
+export)**.
 
 | Panel | Role | Type |
 |---|---|---|
-| **SpikeInjector** | Arm a transient latency **spike** — magnitude (`ms`) × duration (`ticks`) — to reproduce a specific gap on demand → makes experiments repeatable. | INPUT |
-| **ModelToggle** | Enable / disable the prediction layer at runtime to **A/B** the compensated behaviour against the raw **no-prediction baseline**. | INPUT |
+| **SpikeInjector** | Arm a transient latency **spike** — magnitude (`ms`) × duration (`ticks`) — to reproduce a specific gap on demand → makes experiments repeatable. **Auto** mode auto-fires the spike whenever both snakes are constrained (the gate will open), to efficiently collect gate-open samples. | INPUT |
+| **ModelToggle** | Cycle the predictor through **three modes** — `off` (no prediction, raw baseline) / `rule` (dead-reckoning: repeat last confirmed direction) / `model` (GRU) — the evaluation's independent variable, so the GRU is A/B'd against both a rule baseline and no-prediction. | INPUT |
 | **PredictionStats** | Cumulative metrics: glides, verified steps, accuracy (Snake A / B), **masked %** (correct & on-screen), **visible-rollback %** (wrong & on-screen), expired. = the model's **live deployment accuracy**, comparable to offline eval. | OUTPUT |
 | **PredictionTrace** | Per-event mirror of the console: each **PREDICT** (overdue → glide K) and **VERIFY** (✓ / ✗ rollback, on-screen vs still-queued). | OUTPUT |
 | **SyncMonitor** | Track client↔server sync per tick: step, queue depth, fps, pred/idle, and **`ahead`**. Main debugging tool for desync/drift. | OUTPUT |
+| **MetricsExport** | Live count of the raw log tables (ticks / renders / verifies / overdues / infers) with **CSV / JSON export** and **Reset**. The exported files feed the offline analysis ([`evaluation-plan.md`](./evaluation-plan.md), [`../analysis/`](../analysis/)); nothing is aggregated by eye in-app. | OUTPUT |
 
 > `LatencyInjector` / `LatencyDisplay` (constant-latency controls) are retained in the
 > codebase but **hidden** (`v-if="false"`) for the current spike-only testing.
 
 **Demo order (cause → effect):** SpikeInjector (inject a gap) → SyncMonitor (see `ahead`
 rise / felt lag) → PredictionTrace (see the glide & verifies) → PredictionStats (see
-accuracy). Flip **ModelToggle** off to compare against the raw baseline.
+accuracy). Cycle **ModelToggle** through `model` → `rule` → `off` to compare the GRU against
+dead-reckoning and the raw no-prediction baseline on the same spike.
 
 ### The `ahead` metric
 
