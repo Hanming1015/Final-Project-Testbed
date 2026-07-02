@@ -51,10 +51,10 @@ difference is the predictor.
 
 | Metric | Definition | Status |
 |---|---|---|
-| Per-step direction accuracy | predicted dir == server dir, over all predicted steps | ✅ in PredictionStats |
-| **Accuracy by horizon** | t+1 accuracy vs t+2 accuracy *(errors concentrate on t+2)* | ⬜ to add |
-| Accuracy by snake | A vs B (explains predictability asymmetry) | ✅ in PredictionStats |
-| **Coverage** | fraction of overdue/spike steps where the **constraint gate fired** | ⬜ to add |
+| Per-step direction accuracy | predicted dir == server dir, over all predicted steps | ✅ in PredictionStats + `verifies` log |
+| **Accuracy by horizon** | t+1 accuracy vs t+2 accuracy *(errors concentrate on t+2)* | ✅ logged (`verifies.horizon`) — split offline |
+| Accuracy by snake | A vs B (explains predictability asymmetry) | ✅ PredictionStats + `verifies` (`okA`/`okB`) |
+| **Coverage** | fraction of overdue/spike steps where the **constraint gate fired** | ✅ logged (`overdues.gateOpen`) |
 
 > Effective masking ≈ **coverage × accuracy**: high accuracy but low coverage means
 > "accurate when it fires, but rarely fires." Always report coverage alongside.
@@ -63,9 +63,9 @@ difference is the predictor.
 
 | Metric | Definition | Status |
 |---|---|---|
-| **Felt-lag** (mean, **p95**, distribution) | `felt lag = latency − ahead`; report per mode | ⬜ to add (`ahead` logged; combine with injected delay) |
-| **Masked rate** | predicted steps that were correct **and** on-screen → latency hidden | ✅ in PredictionStats |
-| **Visible-rollback rate** | predicted steps that were wrong **and** on-screen → visible correction (the **cost** side) | ✅ in PredictionStats |
+| **Felt-lag** (mean, **p95**, distribution) | `felt lag = latency − ahead`; report per mode | ✅ ingredients logged (`ticks`: `ahead` + delivery time `t` + `spikeMs/spikeTicks`) — derive offline |
+| **Masked rate** | predicted steps that were correct **and** on-screen → latency hidden | ✅ PredictionStats + `verifies` (`correct && onScreen`) |
+| **Visible-rollback rate** | predicted steps that were wrong **and** on-screen → visible correction (the **cost** side) | ✅ PredictionStats + `verifies` (`!correct && onScreen`) |
 | Freeze rate / duration *(optional)* | how often / how long the snake stalls (the `rule`/`off` failure mode) | ⬜ optional |
 
 > Never report felt-lag **alone** — pair it with visible-rollback so both the benefit
@@ -83,14 +83,20 @@ difference is the predictor.
 
 ## 3. Raw data to log
 
-Logging these per event lets you derive every metric above. **Add a structured export
-(CSV / JSON dump)** — do not rely on reading panels by eye; multi-run aggregation needs
-structured data.
+**Implemented** — `MetricsLog.js` records raw fields per event; the `MetricsExport`
+panel dumps CSV / JSON in the browser (do not read panels by eye). Every row is stamped
+with the experiment context (`game, mode, spikeMs, spikeTicks, sinceSpike, t`) so a
+single CSV can be **filtered per condition** offline. Four tables:
 
-- **Per verify:** `mode, spike(m,n), horizon(t+1/t+2), A_pred, A_srv, B_pred, B_srv, correct?, on_screen?`
-- **Per tick:** `ahead, injected_latency` → `felt_lag = latency − ahead`
-- **Per overdue trigger:** `gate_open?` (for coverage)
-- **Per inference:** elapsed ms (already via InferTiming)
+- **`verifies`** (per confirmed prediction): `step, horizon(t+1/t+2), aPred, aSrv, bPred, bSrv, okA, okB, correct, onScreen`
+- **`ticks`** (per delivered move): `step, M, ahead` + delivery time `t` → `felt_lag = injected_latency − ahead` derived offline
+- **`overdues`** (per overdue episode): `gateOpen` → coverage
+- **`infers`** (per model inference): `ms` (feasibility; `rule`/`off` log none)
+
+> **One spike per game.** `sinceSpike` tracks moves since the **most recent** spike, so
+> the intended protocol is one spike setting per game (§4). Firing several different
+> spikes in one game overwrites the earlier `(m,n)` context — fine for the paired
+> protocol, but don't mix conditions within a game.
 
 ---
 
@@ -118,17 +124,22 @@ One figure shows both results at once:
 
 ---
 
-## 6. Engineering still to add
+## 6. Engineering status
 
-Most instrumentation already exists (accuracy, A/B, masked %, visible-rollback %,
-inference timing). The remaining work:
+Instrumentation done:
 
-1. **t+1 / t+2 accuracy split** (tag each pending step with its horizon).
-2. **Felt-lag logging** (combine `ahead` with the known injected delay per tick).
-3. **Coverage counter** (gate-open vs total overdue triggers).
-4. **`rule` predictor mode** (the single `tryPredict` seam — see
-   [`architecture.md`](./architecture.md)) + a tri-state `ModelToggle`.
-5. **Structured export + multi-run aggregation.**
+1. ✅ **t+1 / t+2 accuracy split** — each pending step tagged with `horizon`; logged in `verifies`.
+2. ✅ **Felt-lag logging** — `ticks` logs `ahead` + delivery time + spike params; felt-lag derived offline.
+3. ✅ **Coverage counter** — one `overdues` row per overdue episode with `gateOpen`.
+4. ✅ **`rule` predictor mode** — dead-reckoning at the single `tryPredict` seam
+   (`pa = Array(LOOKAHEAD).fill(shadowA.dir)`) + tri-state `ModelToggle` (off/rule/model).
+5. ✅ **Structured export** — `MetricsLog.js` + `MetricsExport` panel (Verifies CSV / Ticks CSV / JSON).
+
+Remaining:
+
+- ⬜ **Multi-run aggregation** — done **offline** from the exported CSVs (mean ± CI, paired
+  across modes); no in-app aggregation planned.
+- ⬜ **Model size** — record params / ONNX file size once (Tier 3).
 
 ---
 

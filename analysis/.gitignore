@@ -1,0 +1,9 @@
+# analysis outputs and local env
+.venv/
+results/
+_smoke*/
+__pycache__/
+*.pyc
+# raw exports (keep these out of git; archive separately)
+metrics-*.json
+metrics-*.csv

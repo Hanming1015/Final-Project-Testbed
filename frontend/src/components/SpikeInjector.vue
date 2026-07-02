@@ -17,28 +17,36 @@
             </div>
         </div>
 
-        <button class="tb-btn primary" @click="fire">Fire Spike</button>
-        <div class="hint">+{{ ms }} ms on the next {{ ticks }} move{{ ticks === 1 ? '' : 's' }}</div>
+        <div class="btn-row">
+            <button class="tb-btn primary" @click="fire">Fire Spike</button>
+            <button class="tb-btn auto" :class="{ active: auto }" @click="toggleAuto">Auto {{ auto ? 'ON' : 'OFF' }}</button>
+        </div>
+        <div class="hint">
+            +{{ ms }} ms on the next {{ ticks }} move{{ ticks === 1 ? '' : 's' }}
+            <template v-if="auto"><br>auto-fires when both snakes are constrained (gate-open samples)</template>
+        </div>
     </div>
 </template>
 
 <script>
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 
 export default {
     name: 'SpikeInjector',
-    emits: ['fire'],
+    emits: ['fire', 'auto'],
     setup(_, { emit }) {
         const ms    = ref(200);
         const ticks = ref(1);
+        const auto  = ref(false);
 
-        const fire = () => {
-            const m = Math.max(0, ms.value || 0);
-            const t = Math.max(1, ticks.value || 1);
-            emit('fire', { ms: m, ticks: t });
-        };
+        const clamp = () => ({ ms: Math.max(0, ms.value || 0), ticks: Math.max(1, ticks.value || 1) });
+        const fire = () => emit('fire', clamp());
+        const toggleAuto = () => { auto.value = !auto.value; };
 
-        return { ms, ticks, fire };
+        // Keep the parent's auto-spike config in sync with the toggle and inputs.
+        watch([auto, ms, ticks], () => emit('auto', { enabled: auto.value, ...clamp() }));
+
+        return { ms, ticks, auto, fire, toggleAuto };
     }
 };
 </script>
@@ -112,6 +120,13 @@ export default {
 }
 .tb-btn.primary:hover { filter: brightness(1.07); }
 .tb-btn.primary:active { transform: translateY(1px); }
+.btn-row { display: flex; gap: 8px; }
+.btn-row .tb-btn { flex: 1; width: auto; }
+.tb-btn.auto.active {
+    background: #d97706;
+    border-color: #d97706;
+    color: #fff;
+}
 .hint {
     margin-top: 8px;
     font-size: 11px;

@@ -12,10 +12,11 @@
             <!-- LatencyDisplay / LatencyInjector temporarily hidden (spike-only testing) -->
             <LatencyDisplay  v-if="false" :rtt="rttMs" :injected="injectedMs" />
             <LatencyInjector v-if="false" v-model="injectedMs" />
-            <SpikeInjector   @fire="fireSpike" />
-            <ModelToggle     v-model="predictionEnabled" />
+            <SpikeInjector   @fire="fireSpike" @auto="setAutoSpike" />
+            <ModelToggle     v-model="predictorMode" />
             <PredictionTrace :entries="traceEntries" />
             <SyncMonitor     :entries="syncEntries" />
+            <MetricsExport   :summary="metricsSummary" @export="exportMetrics" @reset="resetMetrics" />
         </aside>
     </div>
 </template>
@@ -31,7 +32,9 @@ import ModelToggle     from '@/components/ModelToggle.vue';
 import PredictionTrace from '@/components/PredictionTrace.vue';
 import PredictionStats from '@/components/PredictionStats.vue';
 import SyncMonitor     from '@/components/SyncMonitor.vue';
+import MetricsExport   from '@/components/MetricsExport.vue';
 import { SnakePredictor } from '@/assets/scripts/SnakePredictor';
+import { MetricsLog }     from '@/assets/scripts/MetricsLog';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 
@@ -43,9 +46,9 @@ const TICK_MS = 100; // server tick interval (moves arrive ~this often)
 // ~100ms animation clock and ~100ms server clock is NOT mistaken for latency —
 // only a genuine gap (spike) crosses it. This is what keeps zero latency silent.
 const OVERDUE_MS = TICK_MS * 1.5;
-const DEBUG_PRED = true;            // console-log prediction glides / verifications
-const DIRC = ['↑', '→', '↓', '←']; // direction index → arrow (for logs)
+const DIRC = ['↑', '→', '↓', '←']; // direction index → arrow (trace panel)
 const MAX_TRACE = 40;               // rows kept in the Prediction Trace panel
+const RENDER_LOG_MS = 33;           // throttle for per-frame rendered-step sampling (~30 Hz)
 let _traceId = 0;    // monotonic ID for trace entries
 
 // Fresh cumulative counters for the Prediction Stats panel.
@@ -110,7 +113,7 @@ export default {
     components: {
         PlayGround, MatchGround, ResultBoard,
         LatencyDisplay, LatencyInjector, SpikeInjector, ModelToggle,
-        PredictionTrace, PredictionStats, SyncMonitor
+        PredictionTrace, PredictionStats, SyncMonitor, MetricsExport
     },
     setup() {
         const store = useStore();
@@ -129,6 +132,8 @@ export default {
         let gameEnded = false; // true once a result arrives
         let inferring = false; // true while an ONNX run is in flight (prevents re-entry)
         let lastMoveAt = 0;    // performance.now() of the last delivered move (overdue clock)
+        let overdueLogged = false; // guard: one coverage sample per overdue episode
+        let lastRenderLog = 0;     // performance.now() of the last render sample (throttle)
 
         // Confirmed (server-authoritative) shadow of each snake, evolved purely
         // from the move stream so features/predictions never read mid-animation
@@ -141,7 +146,33 @@ export default {
         const syncEntries = ref([]);
         const traceEntries = ref([]);        // Prediction Trace panel (PREDICT / VERIFY events)
         const predStats = ref(blankStats()); // Prediction Stats panel (cumulative counters)
-        const predictionEnabled = ref(true); // false = silent model (render delayed moves only)
+        const predictorMode = ref('model'); // 'off' | 'rule' | 'model' — predictor source
+
+        // ── Metrics logging (evaluation export) ──────────────────────────────
+        const metrics = new MetricsLog();
+        const metricsSummary = ref(metrics.counts());
+        const refreshMetrics = () => { metricsSummary.value = metrics.counts(); };
+
+        // Download a text blob as a file (browser). Used by the export buttons.
+        const downloadText = (text, filename, mime) => {
+            const blob = new Blob([text], { type: mime });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url; a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+        const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const exportMetrics = kind => {
+            if (kind === 'json') {
+                downloadText(metrics.toJson(), `metrics-${stamp()}.json`, 'application/json');
+                return;
+            }
+            const csv = metrics.toCsv(kind); // 'verifies' | 'ticks'
+            if (!csv) return;                // nothing logged yet
+            downloadText(csv, `metrics-${kind}-${stamp()}.csv`, 'text/csv');
+        };
+        const resetMetrics = () => { metrics.reset(); refreshMetrics(); };
 
         // ── Latency injection (ordered delivery) ─────────────────────────────
         // Each incoming event is delivered after baseline injectedMs plus any
@@ -151,6 +182,14 @@ export default {
         let lastDeliverAt  = 0;   // performance.now() of the previous delivery
         let spikeRemaining = 0;   // moves still affected by the active spike
         let spikeMs        = 0;   // extra delay applied to each affected move
+
+        // Auto-spike: when enabled, fire the configured spike automatically the
+        // next time the confirmed frontier is constrained (the gate will open), so
+        // every spike yields a gate-open felt-lag sample. Cooldown lets each spike
+        // resolve before arming the next.
+        let autoSpike        = { enabled: false, ms: 200, ticks: 1 };
+        let lastAutoFireMove = -999;
+        const setAutoSpike = cfg => { autoSpike = cfg; };
 
         const scheduleDelivery = handler => {
             const now = performance.now();
@@ -169,6 +208,7 @@ export default {
             spikeMs        = ms;
             spikeRemaining = ticks;
             lastDeliverAt  = performance.now();
+            metrics.markSpike(ms, ticks, moveCount);
         };
 
         const initShadow = snake => ({
@@ -204,7 +244,7 @@ export default {
         // so a glide is capped at LOOKAHEAD steps; beyond that the snake freezes
         // until the real moves arrive (gate closed → wait).
         const tryPredict = () => {
-            if (!predictionEnabled.value || inferring || pending.length !== 0) return;
+            if (predictorMode.value === 'off' || inferring || pending.length !== 0) return;
             if (gameEnded || shadowA === null || shadowB === null || confApple === null) return;
 
             const game = store.state.playground.gameObject;
@@ -236,35 +276,54 @@ export default {
             const headA = shadowA.body[0], headB = shadowB.body[0];
             const consA = isConstrained(headA.r, headA.c, shadowA.dir, occupied, gmap, rows, cols);
             const consB = isConstrained(headB.r, headB.c, shadowB.dir, occupied, gmap, rows, cols);
+
+            // Coverage sample: one per overdue episode (guard reset on each move).
+            // The denominator is "overdue + idle + predictor-ready" states; the
+            // numerator is those where the constraint gate actually opened.
+            if (!overdueLogged) {
+                overdueLogged = true;
+                metrics.logOverdue({ mode: predictorMode.value, M: moveCount, gateOpen: consA && consB });
+                refreshMetrics();
+            }
             if (!(consA && consB)) return;
 
             const myEpoch = predEpoch;
 
             inferring = true;
             (async () => {
-                // Run the two models sequentially: the wasm backend cannot run
-                // overlapping inferences on a session.
                 let pa, pb;
                 try {
-                    const _t0 = performance.now();
-                    pa = await predictorA.predict();
-                    const _t1 = performance.now();
-                    pb = await predictorB.predict();
-                    const _t2 = performance.now();
+                    if (predictorMode.value === 'rule') {
+                        // Dead-reckoning baseline: repeat each snake's last confirmed
+                        // direction for all K steps. No inference — routed through the
+                        // same gate / simulate / verify / rollback path as the model,
+                        // so only the direction source differs.
+                        pa = Array(LOOKAHEAD).fill(shadowA.dir);
+                        pb = Array(LOOKAHEAD).fill(shadowB.dir);
+                    } else {
+                        // Run the two models sequentially: the wasm backend cannot run
+                        // overlapping inferences on a session.
+                        const _t0 = performance.now();
+                        pa = await predictorA.predict();
+                        const _t1 = performance.now();
+                        pb = await predictorB.predict();
+                        const _t2 = performance.now();
 
-                    // measurement only — accumulate + periodic report (Step 5 removes)
-                    const dA = _t1 - _t0, dB = _t2 - _t1, dTot = _t2 - _t0;
-                    _infStats.n++; _infStats.sum += dTot; _infStats.sumA += dA;
-                    _infStats.sumB += dB;
-                    if (dTot > _infStats.max) _infStats.max = dTot;
-                    if (_infStats.n % _infReport === 0) {
-                        const s = _infStats;
-                        console.log(
-                            `[InferTiming] n=${s.n} ` +
-                            `avgTotal=${(s.sum / s.n).toFixed(1)}ms ` +
-                            `(A=${(s.sumA / s.n).toFixed(1)} B=${(s.sumB / s.n).toFixed(1)}) ` +
-                            `max=${s.max.toFixed(1)}ms budget=100ms`
-                        );
+                        // measurement only — accumulate + periodic report
+                        const dA = _t1 - _t0, dB = _t2 - _t1, dTot = _t2 - _t0;
+                        metrics.logInfer({ mode: predictorMode.value, ms: dTot });
+                        _infStats.n++; _infStats.sum += dTot; _infStats.sumA += dA;
+                        _infStats.sumB += dB;
+                        if (dTot > _infStats.max) _infStats.max = dTot;
+                        if (_infStats.n % _infReport === 0) {
+                            const s = _infStats;
+                            console.log(
+                                `[InferTiming] n=${s.n} ` +
+                                `avgTotal=${(s.sum / s.n).toFixed(1)}ms ` +
+                                `(A=${(s.sumA / s.n).toFixed(1)} B=${(s.sumB / s.n).toFixed(1)}) ` +
+                                `max=${s.max.toFixed(1)}ms budget=100ms`
+                            );
+                        }
                     }
                 } finally {
                     inferring = false;
@@ -310,7 +369,7 @@ export default {
                     snake0.enqueue_direction(dA, eatA);
                     snake1.enqueue_direction(dB, eatB);
 
-                    pending.push({ step: baseStep + k + 1, dirA: dA, dirB: dB, eatA, eatB });
+                    pending.push({ step: baseStep + k + 1, horizon: k + 1, dirA: dA, dirB: dB, eatA, eatB });
                     gA.push(DIRC[dA]); gB.push(DIRC[dB]);
 
                     occ.add(nrA * cols + ncA);
@@ -322,13 +381,6 @@ export default {
                 if (gA.length) {
                     predStats.value.glides++;
                     pushTrace({ type: 'predict', frontier: baseStep, count: gA.length, a: gA, b: gB });
-                    if (DEBUG_PRED) {
-                        console.log(
-                            `%c[PREDICT] move overdue @frontier ${baseStep} → glide ${gA.length} step(s):` +
-                            `  A=[${gA.join(' ')}]  B=[${gB.join(' ')}]`,
-                            'color:#4f46e5;font-weight:bold'
-                        );
-                    }
                 }
             })();
         };
@@ -341,7 +393,21 @@ export default {
             // backlog (e.g. the bunched moves a finished spike flushes) snaps and
             // the snake stays tight to the confirmed frontier — no permanent lag.
             const game = store.state.playground.gameObject;
-            if (game) game.maxLag = (predictionEnabled.value && pending.length > 0) ? 3 : 1;
+            if (game) {
+                game.maxLag = (predictorMode.value !== 'off' && pending.length > 0) ? 3 : 1;
+                // Sample the rendered step every frame (throttled). Server moves are
+                // NOT delivered during a spike freeze, so tick-based sampling is blind
+                // to the glide (model) vs freeze (off) behaviour that distinguishes the
+                // modes — this render stream is what makes felt-lag measurable there.
+                if (!gameEnded && shadowA !== null) {
+                    const now = performance.now();
+                    if (now - lastRenderLog >= RENDER_LOG_MS) {
+                        lastRenderLog = now;
+                        metrics.logRender({ mode: predictorMode.value, step: game.snakes[0].step, M: moveCount });
+                        refreshMetrics();
+                    }
+                }
+            }
             tryPredict();
             clockHandle = requestAnimationFrame(clockTick);
         };
@@ -392,6 +458,11 @@ export default {
                     syncEntries.value = [];
                     traceEntries.value = [];
                     predStats.value = blankStats();
+                    overdueLogged = false;
+                    lastRenderLog = 0;
+                    lastAutoFireMove = -999;
+                    metrics.newGame();
+                    refreshMetrics();
                     predictorA.reset();
                     predictorB.reset();
 
@@ -428,6 +499,11 @@ export default {
                         });
                         if (syncEntries.value.length > MAX_SYNC) syncEntries.value.shift();
 
+                        // A real move arrived → close the current overdue episode and
+                        // record this delivered move for felt-lag (ahead + timing).
+                        overdueLogged = false;
+                        metrics.logTick({ mode: predictorMode.value, step: snake0.step, M, ahead: snake0.step - M });
+
                         // ── Initialise the confirmed shadow on first move ───────
                         if (shadowA === null) { shadowA = initShadow(snake0); shadowB = initShadow(snake1); }
 
@@ -455,17 +531,13 @@ export default {
                             pushTrace({ type: 'verify', step: M, ok: okA && okB, glided,
                                 aPred: DIRC[p.dirA], aSrv: DIRC[data.a_direction],
                                 bPred: DIRC[p.dirB], bSrv: DIRC[data.b_direction] });
-                            if (DEBUG_PRED) {
-                                const tag = (okA && okB) ? '%c✓ correct' : '%c✗ ROLLBACK';
-                                const col = (okA && okB) ? 'color:#16a34a' : 'color:#dc2626;font-weight:bold';
-                                console.log(
-                                    `[VERIFY] step ${M} ${tag}` +
-                                    `  A pred ${DIRC[p.dirA]}/srv ${DIRC[data.a_direction]}` +
-                                    `  B pred ${DIRC[p.dirB]}/srv ${DIRC[data.b_direction]}` +
-                                    `  ${glided ? 'GLIDED (on screen)' : 'still queued (not shown)'}`,
-                                    col
-                                );
-                            }
+                            metrics.logVerify({
+                                mode: predictorMode.value, step: M, horizon: p.horizon,
+                                aPred: p.dirA, aSrv: data.a_direction,
+                                bPred: p.dirB, bSrv: data.b_direction,
+                                okA, okB, onScreen: glided
+                            });
+                            refreshMetrics();
 
                             if (okA && okB) {
                                 suppressed = true;   // engine already advanced step M correctly
@@ -505,6 +577,20 @@ export default {
                                             game.apple.r, game.apple.c, data.a_ate_apple);
                         predictorB.addFrame(data.b_direction, headB.r, headB.c, occupied, gmap,
                                             game.apple.r, game.apple.c, data.b_ate_apple);
+
+                        // ── Auto-spike: fire when this confirmed frontier is
+                        // constrained (the gate that tryPredict checks will open),
+                        // so the delayed next move lands on a gate-open sample. Same
+                        // occupancy/constraint test as the gate, so they agree.
+                        if (autoSpike.enabled && spikeRemaining === 0 &&
+                            (M - lastAutoFireMove) >= autoSpike.ticks + 3) {
+                            const acA = isConstrained(headA.r, headA.c, shadowA.dir, occupied, gmap, game.rows, cols);
+                            const acB = isConstrained(headB.r, headB.c, shadowB.dir, occupied, gmap, game.rows, cols);
+                            if (acA && acB) {
+                                fireSpike({ ms: autoSpike.ms, ticks: autoSpike.ticks });
+                                lastAutoFireMove = M;
+                            }
+                        }
 
                         // Prediction is no longer triggered here. The clock-driven
                         // refill (tryPredict, started in onMounted) owns it now: it
@@ -561,7 +647,8 @@ export default {
             if (socket) socket.close();
         });
 
-        return { rttMs, injectedMs, predictionEnabled, syncEntries, traceEntries, predStats, fireSpike };
+        return { rttMs, injectedMs, predictorMode, syncEntries, traceEntries, predStats, fireSpike, setAutoSpike,
+                 metricsSummary, exportMetrics, resetMetrics };
     }
 }
 </script>

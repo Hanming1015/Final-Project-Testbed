@@ -1,30 +1,45 @@
 <template>
     <div class="panel model-toggle">
         <div class="header">
-            <span class="panel-title">Prediction Model</span>
-            <button class="toggle-btn" :class="{ active: modelValue }" @click="toggle">
-                {{ modelValue ? 'ON' : 'OFF' }}
+            <span class="panel-title">Predictor Mode</span>
+            <button class="toggle-btn" :class="modelValue" @click="cycle">
+                {{ label }}
             </button>
         </div>
         <div class="status">
             <span class="dim">Status</span>
-            <span :class="modelValue ? 'active-text' : 'silent-text'">
-                {{ modelValue ? 'Active' : 'Silent' }}
+            <span :class="modelValue === 'off' ? 'silent-text' : 'active-text'">
+                {{ statusText }}
             </span>
         </div>
     </div>
 </template>
 
 <script>
+import { computed } from 'vue';
+
+// Three predictor modes, cycled by the toggle (the eval independent variable):
+//   off   — no prediction (freeze + snap baseline)
+//   rule  — dead-reckoning: repeat the last confirmed direction
+//   model — the GRU Seq2Seq
+const ORDER  = ['off', 'rule', 'model'];
+const LABEL  = { off: 'OFF',    rule: 'RULE',            model: 'MODEL' };
+const STATUS = { off: 'Silent', rule: 'Dead-reckoning',  model: 'GRU active' };
+
 export default {
     name: 'ModelToggle',
     props: {
-        modelValue: { type: Boolean, default: true }
+        modelValue: { type: String, default: 'model' }
     },
     emits: ['update:modelValue'],
     setup(props, { emit }) {
-        const toggle = () => emit('update:modelValue', !props.modelValue);
-        return { toggle };
+        const cycle = () => {
+            const i = ORDER.indexOf(props.modelValue);
+            emit('update:modelValue', ORDER[(i + 1) % ORDER.length]);
+        };
+        const label      = computed(() => LABEL[props.modelValue]  ?? 'OFF');
+        const statusText = computed(() => STATUS[props.modelValue] ?? 'Silent');
+        return { cycle, label, statusText };
     }
 };
 </script>
@@ -60,13 +75,20 @@ export default {
     border: 1px solid var(--tb-border);
     border-radius: 6px;
     padding: 2px 12px;
+    min-width: 64px;
     cursor: pointer;
     font-family: var(--tb-font-ui);
     font-size: 12px;
     font-weight: 600;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.toggle-btn.active {
+/* off = muted (default). rule = amber (baseline). model = accent (learned). */
+.toggle-btn.rule {
+    background: #d97706;
+    border-color: #d97706;
+    color: #fff;
+}
+.toggle-btn.model {
     background: var(--tb-accent);
     border-color: var(--tb-accent);
     color: #fff;
