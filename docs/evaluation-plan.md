@@ -14,7 +14,7 @@ for the Benchmarking & Evaluation chapter.
 
 ## 0. Research question under test
 
-> Can a **learned** sequence model (GRU Seq2Seq) mask client-side latency **better
+> Can a **learned** sequence model (a GRU direct multi-step predictor) mask client-side latency **better
 > than hand-written rule-based dead-reckoning**, and how does that advantage depend
 > on the latency spike?
 

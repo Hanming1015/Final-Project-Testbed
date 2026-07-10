@@ -21,7 +21,7 @@ flowchart TB
         direction LR
         SP["Bot Self-Play<br/>(same game engine)"]
         DS[("Dataset<br/>29 egocentric features<br/>+ action labels")]
-        TR["GRU Seq2Seq<br/>Training"]
+        TR["GRU encoder +<br/>direct K-step head<br/>Training"]
         ONNX["/ ONNX Model /"]
         SP -->|"log state + action<br/>per tick"| DS --> TR -->|export| ONNX
     end
@@ -95,7 +95,7 @@ sequenceDiagram
 
 ## 3. One-line summary
 
-A **learned sequence model (GRU Seq2Seq)** does **client-side latency compensation** in a
+A **learned sequence model (a GRU direct multi-step predictor)** does **client-side latency compensation** in a
 **server-authoritative** game. The server owns truth and creates the latency gap; whenever a
 confirmed move is **overdue** (clock-driven, "route-B" — not a measured RTT) the client
 predicts up to **2 steps** ahead (K = horizon; tick 100ms) for **both** snakes, renders them
@@ -164,11 +164,13 @@ rule-based dead-reckoning. I ask whether a **learned model can predict movement 
 hand-written rules**. Snake is a clean, fully-observable testbed for that.
 *Cue: learned model vs rules; snake = means, not goal.*
 
-**Q2 — Why GRU Seq2Seq?**
-Movement is **sequential** → a recurrent model is natural. **GRU is lighter than LSTM** with
-comparable accuracy → it must run client-side in real time via ONNX. **Seq2Seq** outputs
-multiple future steps in one pass.
-*Cue: sequential→RNN; light→client; multi-step output.*
+**Q2 — Why a GRU with a direct multi-step head?**
+Movement is **sequential** → a recurrent encoder is natural. **GRU is lighter than LSTM** with
+comparable accuracy → it must run client-side in real time via ONNX. The output head is
+**direct multi-step**: all K future steps come from **one forward pass** (two parallel heads,
+t+1 / t+2), not an autoregressive decoder — so there is **no compounding error** and inference
+is a single call (see Q7 follow-up for the direct-vs-autoregressive trade-off).
+*Cue: sequential→RNN; light→client; direct multi-step (one pass, no error accumulation).*
 
 **Q3 — Why these features?**
 Built around what determines the next move: current direction, a **5×5 occupancy grid**

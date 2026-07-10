@@ -1,20 +1,20 @@
 # Edge-AI Latency Compensation Testbed
 
-A research testbed for studying and mitigating the effects of network latency in real-time multiplayer web applications, using a two-player snake game as the experimental platform. A **GRU Seq2Seq** model is trained on bot self-play, exported to **ONNX**, and run **in the browser** to predict player trajectories and mask perceived latency.
+A research testbed for studying and mitigating the effects of network latency in real-time multiplayer web applications, using a two-player snake game as the experimental platform. A **GRU direct multi-step predictor** (a recurrent sequence encoder with a fixed K-step output head) is trained on bot self-play, exported to **ONNX**, and run **in the browser** to predict player trajectories and mask perceived latency.
 
 ## Research Background
 
 In highly interactive web systems (e.g. real-time multiplayer games, high-frequency collaboration tools), network latency causes severe visual jitter and frequent server-side state rollbacks, significantly degrading user experience. The traditional approach — **Dead Reckoning** — predicts future positions from object inertia and works well for simple linear motion, but fails under complex, non-linear game logic or sudden state changes.
 
-This project investigates a **Sequence-to-Sequence (Seq2Seq) Machine Learning** architecture deployed as a context-aware, lightweight Edge-AI model running directly in the user's browser (Edge Computing), to predict player trajectories and mask perceived network latency without transmitting sensitive data to the server. The central research question:
+This project investigates a **learned recurrent sequence model** — a GRU encoder with a **direct multi-step** output head (all K future steps produced in a single forward pass, rather than an autoregressive decoder) — deployed as a context-aware, lightweight Edge-AI model running directly in the user's browser (Edge Computing), to predict player trajectories and mask perceived network latency without transmitting sensitive data to the server. The central research question:
 
-> **Can a learned sequence model (GRU Seq2Seq) mask client-side latency better than hand-written rule-based dead-reckoning, and how does that advantage depend on the latency spike?**
+> **Can a learned sequence model (a GRU direct multi-step predictor) mask client-side latency better than hand-written rule-based dead-reckoning, and how does that advantage depend on the latency spike?**
 
 ## Research Objectives
 
 1. **Testbed Implementation** — Build a real-time two-player snake environment (25×28 grid, 40 obstacles, apple rewards) as a data generator and visual demonstration platform. ✅
 2. **Context-Aware Trigger Mechanism** — A **clock-driven** trigger ("route-B"): the client predicts only when a confirmed server move is **overdue**, and only through a **constraint gate** (fires when both snakes are boxed in, where prediction is both useful and reliable). ✅
-3. **Seq2Seq Lightweight Model** — Train a GRU model on egocentric trajectory features, exported to ONNX for in-browser deployment via `onnxruntime-web` (WebAssembly). Single-pass, dual-head output of **K = 2** future steps for **both** snakes. ✅
+3. **Lightweight Sequence Model** — Train a GRU model on egocentric trajectory features, exported to ONNX for in-browser deployment via `onnxruntime-web` (WebAssembly). A single forward pass emits **K = 2** future steps via two output heads (t+1, t+2); **each snake is predicted by its own egocentric inference** (two predictor instances), not by one model outputting both. ✅
 4. **Benchmarking & Evaluation** — Compare three predictor modes (`off` / `rule` / `model`) across a latency-spike sweep, on **felt-lag reduction** (headline), **prediction accuracy** (by horizon / snake), **masked vs visible-rollback rate**, **coverage**, and **inference time**. ✅ instrumented; data collection in progress.
 
 See [`docs/evaluation-plan.md`](docs/evaluation-plan.md) for the full evaluation design and [`analysis/`](analysis/) for the offline analysis pipeline.
@@ -65,7 +65,7 @@ For the full prediction/reconciliation loop, the dashboard instrumentation, and 
 | Frontend Framework | Vue.js 3 + Vue Router + Vuex |
 | UI | Bootstrap 5 + jQuery |
 | HTTP Client | Axios |
-| ML Training | PyTorch (GRU Seq2Seq) |
+| ML Training | PyTorch (GRU encoder + direct multi-step head) |
 | ML Inference | ONNX Runtime Web (`onnxruntime-web`, WebAssembly) |
 | Offline Analysis | Python (pandas / numpy / matplotlib) |
 
